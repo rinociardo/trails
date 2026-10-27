@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Trails</title>
+    <meta name="description" content="Follow a GPX track with live GPS position and off-track alerts.">
+    <meta name="theme-color" content="#2b4c3f">
+
+    <!-- Installable app: manifest for Android/desktop, Apple tags for iPhone Home Screen -->
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Trails">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+
+    <!-- MapLibre is served from this site (vendor/) so the app starts with no signal -->
+    <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
+    <style>
+        :root {
+            --brand: #2b4c3f;
+            --brand-strong: #1f3a30;
+            --on-brand: #ffffff;
+            --on-brand-muted: #c9d8d0;
+            --panel: #ffffff;
+            --panel-text: #1b1f1d;
+            --panel-muted: #5b6660;
+            --panel-border: #d9e0dc;
+            --danger: #c62828;
+            --warn: #f4a259;
+            --ok: #8fd19e;
+            --toolbar-h: 64px;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --panel: #18201c;
+                --panel-text: #e8eeea;
+                --panel-muted: #9aa8a0;
+                --panel-border: #2e3a34;
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+            overscroll-behavior: none;
+            background: var(--brand);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button, select, input { font: inherit; touch-action: manipulation; }
+        /* The map sits between the stats bar and the toolbar, so nothing covers
+           the OSM attribution and "centre" means the visible middle. */
+        #map {
+            position: fixed;
+            left: 0; right: 0;
+            top: var(--stats-h, 0px);
+            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom));
+        }
+
+        /* Live position dot (a MapLibre Marker, so it will follow 3D terrain) */
+        .position-dot {
+            width: 20px; height: 20px;
+            border-radius: 50%;
+            background: #1e66f5;
+            border: 3px solid #fff;
+            box-shadow: 0 0 0 1px rgba(0,0,0,.25), 0 2px 6px rgba(0,0,0,.35);
+        }
+        .position-dot.off-track { background: var(--danger); }
+
+        /* ---- Top stats bar ---- */
+        #stats {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 1000;
+            padding: calc(env(safe-area-inset-top) + 6px) 12px 8px;
+            background: var(--brand);
+            color: var(--on-brand);
+            box-shadow: 0 2px 8px rgba(0,0,0,.25);
+        }
+        .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .stat { display: flex; flex-direction: column; min-width: 0; }
+        .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--on-brand-muted); }
+        .stat-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .stat-value.alert { color: #ffb4a8; }
+        .status-row {
+            display: flex; flex-wrap: wrap; gap: 4px 12px;
+            margin-top: 4px; font-size: 12px; color: var(--on-brand-muted);
+        }
+        .status-row button {
+            background: none; border: 0; padding: 0; color: inherit; text-decoration: underline;
+        }
+        .ok { color: var(--ok); }
+        .warn { color: var(--warn); }
+
+        /* ---- Banners and toast ---- */
+        .banner {
+            position: fixed;
+            left: 12px; right: 12px;
+            z-index: 1001;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-weight: 700;
+            box-shadow: 0 4px 12px rgba(0,0,0,.3);
+        }
+        #alert-banner {
+            top: calc(var(--stats-h, 0px) + 8px);
+            background: var(--danger);
+            color: #fff;
+            font-size: 20px;
+            text-align: center;
+        }
+        #update-banner {
+            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + 40px);
+            background: var(--panel);
+            color: var(--panel-text);
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            font-weight: 600;
+        }
+        #update-banner button {
+            background: var(--brand); color: var(--on-brand); border: 0; border-radius: 8px; padding: 8px 14px;
+        }
+        #toast {
+            position: fixed;
+            left: 50%;
+            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + 40px);
+            transform: translateX(-50%);
+            z-index: 1002;
+            max-width: calc(100% - 32px);
+            padding: 10px 16px;
+            border-radius: 20px;
+            background: rgba(0,0,0,.85);
+            color: #fff;
+            font-size: 14px;
+            text-align: center;
+        }
+        [hidden] { display: none !important; }
+
+        /* ---- Bottom toolbar ---- */
+        #toolbar {
+            position: fixed;
+            left: 0; right: 0; bottom: 0;
+            z-index: 1000;
+            height: calc(var(--toolbar-h) + env(safe-area-inset-bottom));
+            padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+            background: var(--panel);
+            border-top: 1px solid var(--panel-border);
+        }
+        .tool {
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            background: var(--panel);
+            color: var(--panel-text);
+            font-size: 14px; font-weight: 600;
+            cursor: pointer;
+        }
+        .tool.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+        .tool.primary.running { background: var(--danger); border-color: var(--danger); }
+        .tool:active { opacity: .7; }
+
+        /* ---- Dim mode: black screen (OLED pixels off) with minimal info ---- */
+        #dim-overlay {
+            position: fixed; inset: 0;
+            z-index: 2000;
+            background: #000;
+            color: #6f6f6f;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 18px;
+            text-align: center;
+        }
+        #dim-overlay .dim-value { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        #dim-overlay .dim-label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+        #dim-overlay.off-track { color: #ff5a4a; }
+        #dim-hint { font-size: 13px; color: #444; margin-top: 24px; }
+
+        /* ---- Settings dialog ---- */
+        #settings {
+            width: min(420px, calc(100% - 24px));
+            max-height: calc(100% - 48px);
+            border: 0;
+            border-radius: 16px;
+            padding: 0;
+            background: var(--panel);
+            color: var(--panel-text);
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        #settings::backdrop { background: rgba(0,0,0,.45); }
+        #settings form { padding: 16px 18px 18px; }
+        #settings h2 { margin: 0 0 12px; font-size: 18px; }
+        #settings h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--panel-muted); }
+        .field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+        .field input[type=number] { width: 90px; padding: 6px 8px; }
+        .field input, .field select {
+            background: var(--panel); color: var(--panel-text);
+            border: 1px solid var(--panel-border); border-radius: 8px;
+        }
+        .field select { padding: 6px 8px; }
+        .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .actions button, .close-btn {
+            padding: 10px; border-radius: 10px;
+            border: 1px solid var(--panel-border);
+            background: var(--panel); color: var(--panel-text);
+        }
+        .actions button.danger { color: var(--danger); }
+        .close-btn { width: 100%; margin-top: 16px; background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+        dl.info { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
+        dl.info dt { color: var(--panel-muted); }
+        dl.info dd { margin: 0; }
+        .hint { font-size: 12px; color: var(--panel-muted); margin: 4px 0 0; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <header id="stats">
+        <div class="stat-row">
+            <div class="stat"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
+            <div class="stat"><span class="stat-label">Remaining</span><span class="stat-value" id="stat-remaining">–</span></div>
+            <div class="stat"><span class="stat-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
+        </div>
+        <div class="status-row">
+            <span id="track-status">No track — tap Open GPX</span>
+            <span id="gps-status">GPS off</span>
+            <button type="button" id="wake-status" hidden></button>
+        </div>
+    </header>
+
+    <div id="alert-banner" class="banner" role="alert" hidden>OFF TRACK · <span id="alert-distance"></span></div>
+    <div id="update-banner" class="banner" hidden>
+        <span>New version installed.</span>
+        <button type="button" id="reload-btn">Reload</button>
+    </div>
+    <div id="toast" role="status" hidden></div>
+
+    <nav id="toolbar">
+        <label class="tool" for="gpx-input">Open GPX</label>
+        <button type="button" class="tool primary" id="start-btn">Start</button>
+        <button type="button" class="tool" id="center-btn">Center</button>
+        <button type="button" class="tool" id="dim-btn">Dim</button>
+        <button type="button" class="tool" id="settings-btn">Settings</button>
+    </nav>
+    <!-- No "accept" filter: iOS greys out .gpx files when one is set -->
+    <input type="file" id="gpx-input" hidden>
+
+    <div id="dim-overlay" hidden>
+        <div><div class="dim-value" id="dim-done">–</div><div class="dim-label">Done</div></div>
+        <div><div class="dim-value" id="dim-remaining">–</div><div class="dim-label">Remaining</div></div>
+        <div><div class="dim-value" id="dim-offset">–</div><div class="dim-label">From track</div></div>
+        <div id="dim-hint">Tap anywhere to show the map</div>
+    </div>
+
+    <dialog id="settings">
+        <form method="dialog">
+            <h2>Settings</h2>
+
+            <h3>Alerts</h3>
+            <label class="field">Off-track distance (metres)
+                <input type="number" id="set-offtrack" min="10" max="500" step="5" inputmode="numeric">
+            </label>
+            <label class="field">Sound with off-track alert
+                <input type="checkbox" id="set-sound">
+            </label>
+
+            <h3>Battery</h3>
+            <label class="field">Auto-dim while hiking
+                <select id="set-autodim">
+                    <option value="0">Never</option>
+                    <option value="30">After 30 s</option>
+                    <option value="60">After 1 min</option>
+                    <option value="120">After 2 min</option>
+                </select>
+            </label>
+            <p class="hint">Dim shows a black screen, which uses very little power on the iPhone's OLED display. The map stops updating while dimmed.</p>
+
+            <h3>Track</h3>
+            <div class="actions">
+                <button type="button" id="reverse-btn">Reverse direction</button>
+                <button type="button" id="test-loop-btn">Test loop here</button>
+                <button type="button" id="sample-btn">Load sample track</button>
+                <button type="button" class="danger" id="clear-btn">Remove track</button>
+            </div>
+            <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test.</p>
+
+            <h3>This device</h3>
+            <dl class="info">
+                <dt>Running as</dt><dd id="info-mode">–</dd>
+                <dt>Screen wake lock</dt><dd id="info-wakelock">–</dd>
+                <dt>Vibration</dt><dd id="info-vibrate">–</dd>
+                <dt>Storage</dt><dd id="info-storage">–</dd>
+                <dt>App version</dt><dd id="info-version">–</dd>
+            </dl>
+            <div class="actions" style="margin-top: 10px;">
+                <button type="button" id="update-btn">Check for update</button>
+            </div>
+
+            <button class="close-btn" value="close">Done</button>
+        </form>
+    </dialog>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

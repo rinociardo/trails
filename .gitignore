@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+
+# Personal tracks never go in the repo (it is public). Only the sample track is committed.
+*.[gG][pP][xX]
+!/samples/sample-loop.gpx

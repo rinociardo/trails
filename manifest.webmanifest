@@ -1,0 +1,16 @@
+{
+    "name": "Trails",
+    "short_name": "Trails",
+    "description": "Follow a GPX track with live GPS position and off-track alerts.",
+    "start_url": "./",
+    "scope": "./",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#2b4c3f",
+    "theme_color": "#2b4c3f",
+    "icons": [
+        { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+        { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+        { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    ]
+}

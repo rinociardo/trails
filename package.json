@@ -1,0 +1,10 @@
+{
+    "name": "trails",
+    "private": true,
+    "type": "module",
+    "description": "Hiking PWA. No build step: the files are served as-is. package.json only exists to run tests.",
+    "scripts": {
+        "test": "node --test tests/*.test.js",
+        "serve": "python3 -m http.server 8000"
+    }
+}
