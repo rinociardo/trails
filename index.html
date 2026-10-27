@@ -32,6 +32,10 @@
             --warn: #f4a259;
             --ok: #8fd19e;
             --toolbar-h: 64px;
+            --profile-line: #2b6a52;
+            --profile-fill: rgba(43, 106, 82, .16);
+            --profile-grid: #e3e8e5;
+            --profile-marker: #1e66f5;
         }
         @media (prefers-color-scheme: dark) {
             :root {
@@ -39,6 +43,10 @@
                 --panel-text: #e8eeea;
                 --panel-muted: #9aa8a0;
                 --panel-border: #2e3a34;
+                --profile-line: #7cc4a4;
+                --profile-fill: rgba(124, 196, 164, .18);
+                --profile-grid: #2a3530;
+                --profile-marker: #6aa1ff;
             }
         }
         * { box-sizing: border-box; }
@@ -60,7 +68,86 @@
             position: fixed;
             left: 0; right: 0;
             top: var(--stats-h, 0px);
+            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px));
+        }
+
+        /* ---- Trip panel: done/remaining table, elevation profile, walked stats ---- */
+        #trip-panel {
+            position: fixed;
+            left: 0; right: 0;
             bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom));
+            z-index: 1000;
+            background: var(--panel);
+            color: var(--panel-text);
+            border-top: 1px solid var(--panel-border);
+            box-shadow: 0 -2px 8px rgba(0,0,0,.12);
+        }
+        #trip-toggle {
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            width: 100%;
+            padding: 8px 12px;
+            border: 0; background: none; color: inherit;
+            font-size: 14px; font-weight: 600; text-align: left;
+        }
+        #trip-toggle .chevron { color: var(--panel-muted); transition: transform .15s; }
+        #trip-panel.collapsed #trip-toggle .chevron { transform: rotate(180deg); }
+        #trip-panel.collapsed #trip-body { display: none; }
+        #trip-body { padding: 0 12px 8px; }
+        .trip-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+        .trip-table th, .trip-table td { padding: 1px 4px; text-align: right; white-space: nowrap; }
+        .trip-table thead th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--panel-muted); }
+        .trip-table tbody th { text-align: left; font-weight: 500; color: var(--panel-muted); }
+        .trip-table td { font-weight: 600; }
+        .walk-row {
+            display: flex; flex-wrap: wrap; gap: 2px 12px;
+            margin-top: 4px;
+            font-size: 12px; color: var(--panel-muted); font-variant-numeric: tabular-nums;
+        }
+        .walk-row b { color: var(--panel-text); font-weight: 600; }
+
+        .profile { position: relative; height: 96px; margin-top: 6px; touch-action: none; }
+        .profile canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+        .profile-empty {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; color: var(--panel-muted);
+            border: 1px dashed var(--panel-border); border-radius: 8px;
+        }
+        .profile-line, .profile-cursor {
+            position: absolute; top: 0; width: 0;
+            border-left: 2px solid var(--profile-marker);
+            pointer-events: none;
+        }
+        .profile-cursor { border-left: 1px solid var(--panel-muted); }
+        .profile-dot {
+            position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+            border-radius: 50%;
+            background: var(--profile-marker);
+            border: 2px solid var(--panel);
+            pointer-events: none;
+        }
+        .profile-tip {
+            position: absolute; top: 0;
+            padding: 2px 6px; border-radius: 6px;
+            background: var(--panel-text); color: var(--panel);
+            font-size: 12px; font-weight: 600; white-space: nowrap;
+            pointer-events: none;
+        }
+
+        /* ---- Debug view: raw vs smoothed GPS and motion state ---- */
+        #debug-box {
+            position: fixed;
+            top: calc(var(--stats-h, 0px) + 8px);
+            left: 8px;
+            z-index: 1000;
+            max-width: calc(100% - 16px);
+            padding: 6px 8px;
+            border-radius: 8px;
+            background: rgba(0,0,0,.78);
+            color: #e8e8e8;
+            font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+            white-space: pre;
+            pointer-events: none;
         }
 
         /* Live position dot (a MapLibre Marker, so it will follow 3D terrain) */
@@ -116,7 +203,7 @@
             text-align: center;
         }
         #update-banner {
-            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + 40px);
+            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px) + 36px);
             background: var(--panel);
             color: var(--panel-text);
             display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -128,7 +215,7 @@
         #toast {
             position: fixed;
             left: 50%;
-            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + 40px);
+            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px) + 36px);
             transform: translateX(-50%);
             z-index: 1002;
             max-width: calc(100% - 32px);
@@ -231,9 +318,45 @@
         <div class="status-row">
             <span id="track-status">No track — tap Open GPX</span>
             <span id="gps-status">GPS off</span>
+            <span id="motion-status" hidden></span>
             <button type="button" id="wake-status" hidden></button>
         </div>
     </header>
+
+    <div id="debug-box" hidden></div>
+
+    <section id="trip-panel" aria-label="Trip">
+        <button type="button" id="trip-toggle" aria-expanded="true">
+            <span id="trip-summary">No track loaded</span>
+            <span class="chevron" aria-hidden="true">▾</span>
+        </button>
+        <div id="trip-body">
+            <table class="trip-table">
+                <thead>
+                    <tr><th></th><th>Done</th><th>Remaining</th><th>Total</th></tr>
+                </thead>
+                <tbody>
+                    <tr><th>Distance</th><td id="t-dist-done">–</td><td id="t-dist-rem">–</td><td id="t-dist-total">–</td></tr>
+                    <tr><th>Ascent</th><td id="t-asc-done">–</td><td id="t-asc-rem">–</td><td id="t-asc-total">–</td></tr>
+                    <tr><th>Descent</th><td id="t-desc-done">–</td><td id="t-desc-rem">–</td><td id="t-desc-total">–</td></tr>
+                </tbody>
+            </table>
+            <div class="profile" id="profile" aria-label="Elevation profile">
+                <canvas></canvas>
+                <div class="profile-line" hidden></div>
+                <div class="profile-dot" hidden></div>
+                <div class="profile-cursor" hidden></div>
+                <div class="profile-tip" hidden></div>
+                <div class="profile-empty" hidden>No elevation data in this track</div>
+            </div>
+            <div class="walk-row">
+                <span>Walked <b id="w-walked">–</b></span>
+                <span>Moving <b id="w-moving">–</b></span>
+                <span>Stopped <b id="w-stopped">–</b></span>
+                <span>Avg <b id="w-speed">–</b></span>
+            </div>
+        </div>
+    </section>
 
     <div id="alert-banner" class="banner" role="alert" hidden>OFF TRACK · <span id="alert-distance"></span></div>
     <div id="update-banner" class="banner" hidden>
@@ -256,6 +379,8 @@
         <div><div class="dim-value" id="dim-done">–</div><div class="dim-label">Done</div></div>
         <div><div class="dim-value" id="dim-remaining">–</div><div class="dim-label">Remaining</div></div>
         <div><div class="dim-value" id="dim-offset">–</div><div class="dim-label">From track</div></div>
+        <div><div class="dim-value" id="dim-climb">–</div><div class="dim-label">Climb left</div></div>
+        <div class="dim-label" id="dim-motion"></div>
         <div id="dim-hint">Tap anywhere to show the map</div>
     </div>
 
@@ -281,6 +406,38 @@
                 </select>
             </label>
             <p class="hint">Dim shows a black screen, which uses very little power on the iPhone's OLED display. The map stops updating while dimmed.</p>
+
+            <h3>GPS smoothing</h3>
+            <label class="field">Ignore fixes worse than (metres)
+                <input type="number" id="set-maxacc" min="5" max="100" step="5" inputmode="numeric">
+            </label>
+            <label class="field">Average the last (fixes)
+                <input type="number" id="set-window" min="1" max="15" step="1" inputmode="numeric">
+            </label>
+            <p class="hint">More fixes give a steadier position but it trails behind you: about half a second per fix (5 fixes ≈ 2 s ≈ 3 m at walking pace).</p>
+
+            <h3>Stop detection</h3>
+            <label class="field">Stopped when within (metres)
+                <input type="number" id="set-stopradius" min="5" max="50" step="1" inputmode="numeric">
+            </label>
+            <label class="field">…for at least (seconds)
+                <input type="number" id="set-stoptime" min="10" max="300" step="5" inputmode="numeric">
+            </label>
+            <p class="hint">The distance grows to the GPS accuracy when that is worse. Very slow, steep climbing (under about 1.8 km/h on the map with the defaults) may count as stopped.</p>
+
+            <h3>Elevation</h3>
+            <label class="field">Ignore climbs/drops smaller than (metres)
+                <input type="number" id="set-elethreshold" min="0" max="20" step="1" inputmode="numeric">
+            </label>
+            <p class="hint">Removes small ups and downs from total ascent/descent. Compare with Maps 3D PRO on the same GPX to tune it.</p>
+
+            <h3>Testing</h3>
+            <label class="field">Debug view (raw vs smoothed GPS)
+                <input type="checkbox" id="set-debug">
+            </label>
+            <div class="actions">
+                <button type="button" id="reset-trip-btn">Reset walked/time</button>
+            </div>
 
             <h3>Track</h3>
             <div class="actions">

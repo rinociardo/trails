@@ -62,12 +62,48 @@ wanted eventually.
 - Battery-friendly behaviour wherever possible (GPS only while hiking, black "dim" screen
   for the OLED display, auto-dim, minimal map redraws).
 
-### Requested next (2026-10-27, details pending from the user)
-- **Elevation profile** of the track.
-- **Position smoothing** (steadier GPS position).
-- **Standing detection** (recognise when I'm stopped).
-The user referred to "earlier messages" describing these, but those details were never
-given in this project's conversations. Get the specifics before building.
+### Elevation profile, like Maps 3D PRO (done in v0.3.0, awaiting iPhone testing)
+- Chart of the loaded track: distance (km) on x, elevation (m) on y, marker at my current
+  position (`profile-chart.js`; drag a finger on it to read any point).
+- Live numbers: distance, ascent and descent, each done / remaining (`elevation.js`).
+- Totals (distance, ascent, descent) shown as soon as a track is loaded, before starting,
+  so trails can be compared while scouting.
+- Use the **track's** elevation at my snapped position, never GPS altitude (too noisy).
+- Smooth elevations before summing ascent/descent. Chosen: **5 m hysteresis** (a climb or
+  drop only counts once it exceeds 5 m), adjustable in Settings to compare with Maps 3D PRO.
+- GPX without elevations shows "no elevation data". Later: fill from a DEM (Digital
+  Elevation Model) source.
+
+### Position smoothing (done in v0.3.0)
+- Discard fixes whose reported accuracy is worse than **30 m**.
+- Average the last **~5 good fixes**, weighted by accuracy (weight 1/accuracy²), before
+  snapping to the track. Fixes older than 30 s are dropped from the average.
+- Window size and accuracy threshold are settings. Lag: about (N−1)/2 fixes, so ≈2 s
+  (≈3 m at walking pace) with 5 fixes at iPhone's ~1 fix/s.
+
+### Standing detection (done in v0.3.0)
+- STOPPED when all positions of the last **30 s** lie within **max(15 m, current accuracy)**
+  of each other: walked distance freezes, "Stopped" shows with a timer.
+  Decision: measured point-to-point (not as a radius from the centre), otherwise a 1 m/s
+  walk counts as stopped. Consequence: below ≈1.8 km/h horizontal (very steep climbs) may
+  count as stopped with the defaults.
+- MOVING again when I leave that distance from the stop's centre; counting continues from
+  there. Decision: the real distance (approach to the stop centre, and centre to the exit
+  point) is kept, so stops don't lose up to ~30 m each.
+- Show moving time and stopped time; average speed uses moving time only.
+- Two separate distances: progress along the planned track (from snapping) and distance
+  actually walked (recorded, with stop detection).
+- No off-track alarms from jitter while stopped (position and progress are frozen).
+- Radius and time are settings. Stop/Start pauses and resumes the recording; "Reset
+  walked/time" in Settings starts it again (also reset when a new track is loaded).
+
+### Debug view (done in v0.3.0)
+- Toggle in Settings › Testing. Map shows raw fixes (orange), discarded fixes (red rings),
+  smoothed positions (blue) and the stop circle (purple, dashed); a text box shows the
+  state, accuracies, fixes used/discarded, raw-to-smoothed distance, stop check, snapped
+  progress and walked distance.
+- `?sim` simulation includes GPS noise, bad fixes, a 45 s stop and a detour
+  (`?sim=N` sets N× walking speed, default 10).
 
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
@@ -92,5 +128,9 @@ given in this project's conversations. Get the specifics before building.
 ## Developer notes
 
 - Run locally: `python3 -m http.server 8000`; tests: `npm test`.
-- Developer switches: `?sim` (replays the loaded track with a 120 m detour) and
-  `?terrain=demo` (3D terrain preview over Innsbruck).
+- Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
+  120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js` and is unit-tested in `tests/`;
+  keep it free of browser APIs so it stays testable with Node.
+- Known gap: the walked distance/time recording lives in memory only; if iOS closes the
+  app, it starts from zero.

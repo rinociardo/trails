@@ -18,6 +18,7 @@ function buildStyle(basemap) {
             basemap: basemap.source,
             track: { type: 'geojson', data: EMPTY },
             accuracy: { type: 'geojson', data: EMPTY },
+            debug: { type: 'geojson', data: EMPTY },
         },
         layers: [
             { id: 'basemap', type: 'raster', source: 'basemap' },
@@ -48,8 +49,29 @@ function buildStyle(basemap) {
                     'circle-stroke-width': 2,
                 },
             },
+            // Debug view: stop circle, raw fixes (orange), discarded fixes (red ring),
+            // smoothed positions (blue).
+            {
+                id: 'debug-stop', type: 'line', source: 'debug',
+                filter: ['==', ['geometry-type'], 'Polygon'],
+                paint: { 'line-color': '#7b1fa2', 'line-width': 2, 'line-dasharray': [2, 2] },
+            },
+            {
+                id: 'debug-points', type: 'circle', source: 'debug',
+                filter: ['==', ['geometry-type'], 'Point'],
+                paint: {
+                    'circle-radius': ['match', ['get', 'kind'], 'smooth', 3.5, 4],
+                    'circle-color': ['match', ['get', 'kind'], 'raw', '#f08c00', 'smooth', '#1e66f5', 'rgba(0,0,0,0)'],
+                    'circle-stroke-color': ['match', ['get', 'kind'], 'discarded', '#d32f2f', '#ffffff'],
+                    'circle-stroke-width': ['match', ['get', 'kind'], 'discarded', 2, 1],
+                },
+            },
         ],
     };
+}
+
+function circlePolygon(centre, radiusM) {
+    return accuracyGeoJson({ lat: centre.lat, lon: centre.lon, acc: radiusM });
 }
 
 // Hill shading plus 3D terrain. MapLibre recommends separate sources for the
@@ -180,6 +202,30 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
 
         setFollow(on) {
             following = on;
+        },
+
+        // debug: { raw: [{lat, lon, accepted}], smooth: [{lat, lon}], stop: {centre, radius} | null },
+        // or null to clear.
+        setDebug(debug) {
+            const features = [];
+            if (debug) {
+                if (debug.stop) features.push(circlePolygon(debug.stop.centre, debug.stop.radius));
+                for (const p of debug.raw) {
+                    features.push({
+                        type: 'Feature',
+                        properties: { kind: p.accepted ? 'raw' : 'discarded' },
+                        geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+                    });
+                }
+                for (const p of debug.smooth) {
+                    features.push({
+                        type: 'Feature',
+                        properties: { kind: 'smooth' },
+                        geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+                    });
+                }
+            }
+            ready.then(() => map.getSource('debug').setData({ type: 'FeatureCollection', features }));
         },
     };
 }

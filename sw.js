@@ -1,6 +1,6 @@
 // Offline support for the app itself (not map tiles).
 // Bump VERSION on every release: it names the cache and is shown in Settings.
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const CACHE_PREFIX = 'trails-';
 const CACHE = `${CACHE_PREFIX}${VERSION}`;
 
@@ -13,6 +13,9 @@ const APP_FILES = [
     './app.js',
     './geo.js',
     './gpx.js',
+    './elevation.js',
+    './tracker.js',
+    './profile-chart.js',
     './map-view.js',
     './map-config.js',
     './manifest.webmanifest',

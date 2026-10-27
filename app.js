@@ -1,22 +1,38 @@
-import { buildTrack, locateOnTrack, pointAtDistance } from './geo.js';
+import { buildTrack, locateOnTrack, pointAtDistance, haversine } from './geo.js';
 import { parseGpx } from './gpx.js';
+import { buildProfile, profileAt, DEFAULT_ELEVATION_THRESHOLD_M } from './elevation.js';
+import { PositionSmoother, MotionTracker, DEFAULT_TRACKING } from './tracker.js';
 import { createMapView } from './map-view.js';
+import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 
-// Developer switches: ?sim replays the loaded track with a fake detour,
-// ?terrain=demo previews 3D terrain with MapLibre's demo elevation tiles.
+// Developer switches: ?sim (or ?sim=N for N× walking speed, default 10) replays
+// the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
+// 3D terrain with MapLibre's demo elevation tiles.
 const params = new URLSearchParams(location.search);
 const SIMULATE = params.has('sim');
+const SIM_SPEEDUP = Math.max(1, Number(params.get('sim')) || 10);
 const terrain = params.get('terrain') === 'demo' ? DEMO_TERRAIN : TERRAIN;
 
 const DEFAULT_CENTER = { lat: 40.5, lon: 18.0 };
-const MAX_ACCURACY_M = 50;          // fixes worse than this don't move progress or trigger alerts
 const OFF_TRACK_CONFIRM_FIXES = 2;  // consecutive far fixes before alerting (filters GPS jumps)
 const BACK_ON_TRACK_RATIO = 0.8;    // must come back inside 80% of the limit to clear the alert
 const ALERT_REPEAT_MS = 60_000;
 const STALE_FIX_MS = 30_000;
+const DEBUG_HISTORY = 60;           // fixes kept for the debug view
 const SETTINGS_KEY = 'trails.settings';
-const DEFAULT_SETTINGS = { offTrackM: 50, sound: true, autoDimS: 60 };
+const DEFAULT_SETTINGS = {
+    offTrackM: 50,
+    sound: true,
+    autoDimS: 60,
+    maxAccuracyM: DEFAULT_TRACKING.maxAccuracyM,
+    smoothWindow: DEFAULT_TRACKING.windowSize,
+    stopRadiusM: DEFAULT_TRACKING.stopRadiusM,
+    stopTimeS: DEFAULT_TRACKING.stopTimeS,
+    eleThresholdM: DEFAULT_ELEVATION_THRESHOLD_M,
+    debug: false,
+    panelOpen: true,
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -84,6 +100,17 @@ function formatDistance(m) {
     return `${(m / 1000).toFixed(m < 10_000 ? 2 : 1)} km`;
 }
 
+function formatMetres(m) {
+    return m == null || !Number.isFinite(m) ? '–' : `${Math.round(m)} m`;
+}
+
+function formatDuration(ms) {
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
 let toastTimer = null;
 function toast(message, ms = 3000) {
     const el = $('toast');
@@ -93,12 +120,25 @@ function toast(message, ms = 3000) {
     toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
-// The map fills the space between the stats bar and the toolbar.
+// The map fills the space between the stats bar and the trip panel.
 function updateLayout() {
-    document.documentElement.style.setProperty('--stats-h', `${$('stats').offsetHeight}px`);
+    const root = document.documentElement.style;
+    root.setProperty('--stats-h', `${$('stats').offsetHeight}px`);
+    root.setProperty('--panel-h', `${$('trip-panel').offsetHeight}px`);
 }
+$('trip-panel').classList.toggle('collapsed', !settings.panelOpen);
+$('trip-toggle').setAttribute('aria-expanded', String(settings.panelOpen));
 updateLayout();
-new ResizeObserver(updateLayout).observe($('stats'));
+const layoutObserver = new ResizeObserver(updateLayout);
+layoutObserver.observe($('stats'));
+layoutObserver.observe($('trip-panel'));
+
+$('trip-toggle').addEventListener('click', () => {
+    settings.panelOpen = !settings.panelOpen;
+    saveSettings();
+    $('trip-panel').classList.toggle('collapsed', !settings.panelOpen);
+    $('trip-toggle').setAttribute('aria-expanded', String(settings.panelOpen));
+});
 
 // ---------- Map ----------
 
@@ -112,23 +152,36 @@ view.on('webglcontextlost', () => {
     toast('The map display was reset by the phone. It should redraw by itself.', 6000);
 });
 
+const chart = createProfileChart($('profile'));
+
 // ---------- State ----------
 
-let track = null; // { name, points, cum, total }
+let track = null; // { name, points, cum, total, profile } (profile null without elevations)
+
+const smoother = new PositionSmoother({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
+const motion = new MotionTracker({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS });
 
 const hike = {
     running: false,
     watchId: null,
     simTimer: null,
-    staleTimer: null,
-    lastFix: null,
+    clockTimer: null,
+    lastFix: null,      // position shown on the map: { lat, lon, acc }
     lastFixAt: 0,
     prevAlong: 0,
-    progress: null, // { along, offset }
+    progress: null,     // { along, offset } from the snapped, smoothed position
     farCount: 0,
     offTrack: false,
     lastAlertAt: 0,
     dimmed: false,
+};
+
+// Recent fixes for the debug view.
+const debug = {
+    raw: [],            // { lat, lon, acc, accepted, time }
+    smooth: [],         // { lat, lon, acc, count }
+    discarded: 0,
+    lastInterval: null, // ms between the last two raw fixes
 };
 
 // ---------- Rendering ----------
@@ -154,6 +207,58 @@ function renderStats() {
     $('dim-overlay').classList.toggle('off-track', hike.offTrack);
     $('alert-banner').hidden = !hike.offTrack;
     if (hike.offTrack) setText($('alert-distance'), `${offsetText} from route`);
+
+    renderTrip();
+}
+
+// Done / remaining / total table and the profile marker. Totals show as soon
+// as a track is loaded, so trails can be compared before starting.
+function renderTrip() {
+    const prof = track?.profile;
+    const along = hike.progress?.along ?? 0;
+    const started = Boolean(track && hike.progress);
+    const done = (v) => (started ? v : '–');
+
+    setText($('t-dist-done'), done(formatDistance(along)));
+    setText($('t-dist-rem'), track ? formatDistance(track.total - along) : '–');
+    setText($('t-dist-total'), track ? formatDistance(track.total) : '–');
+
+    const at = prof ? profileAt(track, prof, along) : null;
+    setText($('t-asc-done'), prof ? done(formatMetres(at.ascentDone)) : '–');
+    setText($('t-asc-rem'), prof ? formatMetres(prof.totalAscent - at.ascentDone) : '–');
+    setText($('t-asc-total'), prof ? formatMetres(prof.totalAscent) : '–');
+    setText($('t-desc-done'), prof ? done(formatMetres(at.descentDone)) : '–');
+    setText($('t-desc-rem'), prof ? formatMetres(prof.totalDescent - at.descentDone) : '–');
+    setText($('t-desc-total'), prof ? formatMetres(prof.totalDescent) : '–');
+    setText($('dim-climb'), prof ? formatMetres(prof.totalAscent - at.ascentDone) : '–');
+
+    let summary = 'No track loaded';
+    if (track) {
+        summary = prof
+            ? `${formatDistance(track.total)} · ↑ ${formatMetres(prof.totalAscent)} · ↓ ${formatMetres(prof.totalDescent)}`
+            : `${formatDistance(track.total)} · no elevation data`;
+    }
+    setText($('trip-summary'), summary);
+    if (!hike.dimmed) chart.setPosition(started ? along : null);
+}
+
+// Distance actually walked and moving/stopped time (from the motion tracker).
+function renderWalk(now = Date.now()) {
+    motion.tick(now);
+    const recorded = motion.movingMs + motion.stoppedMs > 0;
+    setText($('w-walked'), recorded ? formatDistance(motion.walked) : '–');
+    setText($('w-moving'), recorded ? formatDuration(motion.movingMs) : '–');
+    setText($('w-stopped'), recorded ? formatDuration(motion.stoppedMs) : '–');
+    // Average speed over moving time only; meaningless in the first minute.
+    const hours = motion.movingMs / 3_600_000;
+    setText($('w-speed'), motion.movingMs >= 60_000 ? `${(motion.walked / 1000 / hours).toFixed(1)} km/h` : '–');
+
+    const status = $('motion-status');
+    status.hidden = !hike.running;
+    const stopped = motion.state === 'STOPPED';
+    const text = stopped ? `Stopped ${formatDuration(now - motion.stoppedSince)}` : 'Moving';
+    setStatus(status, text, stopped ? 'warn' : '');
+    setText($('dim-motion'), hike.running ? text : '');
 }
 
 function renderTrackStatus() {
@@ -163,10 +268,64 @@ function renderTrackStatus() {
     setText($('track-status'), text);
 }
 
+function pushLimited(list, item) {
+    list.push(item);
+    if (list.length > DEBUG_HISTORY) list.shift();
+}
+
+function renderDebug() {
+    const box = $('debug-box');
+    box.hidden = !settings.debug;
+    if (!settings.debug) return;
+
+    const raw = debug.raw[debug.raw.length - 1];
+    const sm = debug.smooth[debug.smooth.length - 1];
+    const now = Date.now();
+    const stopped = motion.state === 'STOPPED';
+    const lines = [
+        `State    ${hike.running ? motion.state : 'not recording'}` +
+            (stopped ? ` ${formatDuration(now - motion.stoppedSince)}` : ''),
+        raw ? `Raw      ±${Math.round(raw.acc)} m ${raw.accepted ? 'used' : 'DISCARDED'}` +
+            (debug.lastInterval ? `, every ${(debug.lastInterval / 1000).toFixed(1)} s` : '') : 'Raw      –',
+        `Discard  ${debug.discarded} fixes worse than ${settings.maxAccuracyM} m`,
+        sm ? `Smooth   ${sm.count}/${settings.smoothWindow} fixes, ±${sm.acc.toFixed(1)} m` : 'Smooth   –',
+        raw && sm ? `Raw→smooth ${haversine(raw, sm).toFixed(1)} m` : 'Raw→smooth –',
+        stopped
+            ? `Stop     inside ${Math.round(motion.radius)} m of stop centre`
+            : `Stop chk spread ${motion.history.length > 1 ? Math.round(motion.spread()) : 0} m of ${Math.round(motion.radius)} m, need ${settings.stopTimeS} s`,
+        hike.progress ? `Snapped  ${formatDistance(hike.progress.along)}, ${formatMetres(hike.progress.offset)} off` : 'Snapped  –',
+        `Walked   ${formatDistance(motion.walked)}`,
+    ];
+    setText(box, lines.join('\n'));
+
+    if (!hike.dimmed) {
+        view.setDebug({
+            raw: debug.raw,
+            smooth: debug.smooth,
+            stop: stopped ? { centre: motion.anchor, radius: motion.radius } : null,
+        });
+    }
+}
+
 // ---------- Track loading ----------
+
+// Walked distance and moving/stopped time start again from zero.
+function resetTrip() {
+    const wasRecording = motion.lastTick != null;
+    motion.reset();
+    smoother.reset();
+    if (wasRecording) motion.start(Date.now());
+    debug.raw = [];
+    debug.smooth = [];
+    debug.discarded = 0;
+    renderWalk();
+    renderDebug();
+}
 
 async function setTrack(name, points, { save = true } = {}) {
     track = { name, ...buildTrack(points) };
+    track.profile = buildProfile(track, settings.eleThresholdM);
+    chart.setData(track, track.profile);
     hike.prevAlong = 0;
     hike.progress = null;
     resetOffTrack();
@@ -189,6 +348,7 @@ async function clearTrack() {
     track = null;
     hike.progress = null;
     resetOffTrack();
+    chart.setData(null, null);
     view.clearTrack();
     renderTrackStatus();
     renderStats();
@@ -219,6 +379,7 @@ $('gpx-input').addEventListener('change', async (event) => {
     try {
         const { name, points } = parseGpx(await file.text());
         await setTrack(name || file.name.replace(/\.gpx$/i, ''), points);
+        resetTrip();
         toast(`Loaded ${formatDistance(track.total)} track.`);
     } catch (err) {
         console.error('GPX import failed:', err);
@@ -349,8 +510,10 @@ function exitDim() {
     if (!hike.dimmed) return;
     hike.dimmed = false;
     $('dim-overlay').hidden = true;
-    // The map is not updated while dimmed; catch up now.
+    // The map and profile marker are not updated while dimmed; catch up now.
     if (hike.lastFix) view.showPosition(hike.lastFix, { offTrack: hike.offTrack });
+    renderTrip();
+    renderDebug();
 }
 
 function resetIdleTimer() {
@@ -375,30 +538,48 @@ $('dim-btn').addEventListener('click', () => {
 
 // ---------- GPS ----------
 
+// Each GPS fix: discard if inaccurate -> smooth -> moving/stopped -> snap to track.
 function onFix(position) {
-    const fix = {
+    const now = Date.now();
+    const raw = {
         lat: position.coords.latitude,
         lon: position.coords.longitude,
         acc: position.coords.accuracy,
+        time: now,
     };
-    hike.lastFix = fix;
-    hike.lastFixAt = Date.now();
+    debug.lastInterval = hike.lastFixAt ? now - hike.lastFixAt : null;
+    hike.lastFixAt = now;
 
-    const good = fix.acc <= MAX_ACCURACY_M;
-    setStatus($('gps-status'),
-        good ? `GPS ±${Math.round(fix.acc)} m` : `GPS weak ±${Math.round(fix.acc)} m`,
-        good ? 'ok' : 'warn');
+    const smoothed = smoother.add(raw);
+    pushLimited(debug.raw, { ...raw, accepted: Boolean(smoothed) });
+    if (!smoothed) {
+        debug.discarded++;
+        setStatus($('gps-status'), `GPS weak ±${Math.round(raw.acc)} m (ignored)`, 'warn');
+        renderDebug();
+        return;
+    }
+    pushLimited(debug.smooth, smoothed);
+    setStatus($('gps-status'), `GPS ±${Math.round(raw.acc)} m`, 'ok');
 
-    if (good && track) {
-        const loc = locateOnTrack(track, fix, hike.prevAlong);
+    motion.update(smoothed, raw.acc, now);
+    const stopped = motion.state === 'STOPPED';
+
+    // While stopped, progress and position stay frozen at the stop's centre,
+    // so jitter can neither move the numbers nor raise an off-track alarm.
+    if (track && !stopped) {
+        const loc = locateOnTrack(track, smoothed, hike.prevAlong);
         hike.prevAlong = loc.along;
         hike.progress = { along: loc.along, offset: loc.offset };
         updateOffTrack(loc.offset);
     }
+    const shown = stopped ? motion.anchor : smoothed;
+    hike.lastFix = { lat: shown.lat, lon: shown.lon, acc: raw.acc };
 
     // While dimmed the map is hidden: skip redrawing it to save battery.
-    if (!hike.dimmed) view.showPosition(fix, { offTrack: hike.offTrack });
+    if (!hike.dimmed) view.showPosition(hike.lastFix, { offTrack: hike.offTrack });
     renderStats();
+    renderWalk(now);
+    renderDebug();
 }
 
 function onGeoError(err) {
@@ -423,29 +604,44 @@ function checkStaleFix() {
     }
 }
 
-// Replays the loaded track in about four minutes, with one detour of up to
-// 120 m to the side around 30–38% of the way, to exercise the off-track alert.
+// Replays the loaded track at SIM_SPEEDUP × walking pace (1.4 m/s), one fix per
+// second, with realistic GPS noise (±4 m scatter, accuracy 5–15 m, an occasional
+// ±45 m fix that must be discarded), a 45 s stop at 15% of the way and a detour
+// of up to 120 m to the side at 30–38%.
 function startSimulation() {
-    const speed = Math.max(5, track.total / 240);
+    const speed = 1.4 * SIM_SPEEDUP;
+    const stopAt = track.total * 0.15;
     const detourStart = track.total * 0.30;
     const detourEnd = track.total * 0.38;
-    let along = 0;
+    let along = 0, stopLeft = 45, tick = 0;
+    const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+
     hike.simTimer = setInterval(() => {
-        along = Math.min(track.total, along + speed);
+        tick++;
+        if (along >= stopAt && stopLeft > 0) stopLeft--;
+        else along = Math.min(track.total, along + speed);
+
         const p = pointAtDistance(track, along);
         let side = 0;
         if (along > detourStart && along < detourEnd) {
             const f = (along - detourStart) / (detourEnd - detourStart);
             side = 120 * (1 - Math.abs(2 * f - 1));
         }
-        // Shift sideways, perpendicular to the current segment.
+        // Shift sideways, perpendicular to the current segment, then add noise.
         const a = track.points[p.index], b = track.points[p.index + 1];
         const cosLat = Math.cos(p.lat * Math.PI / 180);
         const dx = (b.lon - a.lon) * cosLat, dy = b.lat - a.lat;
         const len = Math.hypot(dx, dy) || 1;
-        const lat = p.lat + (dx / len) * side / 111320;
-        const lon = p.lon - (dy / len) * side / (111320 * cosLat);
-        onFix({ coords: { latitude: lat, longitude: lon, accuracy: 6 } });
+        const north = (dx / len) * side + 4 * gauss();
+        const east = -(dy / len) * side + 4 * gauss();
+        const accuracy = tick % 15 === 0 ? 45 : 5 + 10 * Math.random();
+        onFix({
+            coords: {
+                latitude: p.lat + north / 111320,
+                longitude: p.lon + east / (111320 * cosLat),
+                accuracy,
+            },
+        });
         if (along >= track.total) {
             clearInterval(hike.simTimer);
             hike.simTimer = null;
@@ -470,6 +666,7 @@ function startHike() {
     $('start-btn').classList.add('running');
     setStatus($('gps-status'), SIMULATE ? 'Simulating GPS' : 'Waiting for GPS…', 'warn');
     requestWakeLock();
+    motion.start(Date.now());
     if (SIMULATE) {
         startSimulation();
     } else {
@@ -479,18 +676,27 @@ function startHike() {
             timeout: 30_000,
         });
     }
-    hike.staleTimer = setInterval(checkStaleFix, 5000);
+    // Once a second: running clocks (moving/stopped timer) and the stale-GPS check.
+    hike.clockTimer = setInterval(() => {
+        renderWalk();
+        checkStaleFix();
+    }, 1000);
+    renderWalk();
     resetIdleTimer();
 }
 
+// Stop pauses the recording; Start continues it (Settings › Reset walked/time).
 function stopHike() {
     if (hike.watchId != null) navigator.geolocation.clearWatch(hike.watchId);
     clearInterval(hike.simTimer);
-    clearInterval(hike.staleTimer);
+    clearInterval(hike.clockTimer);
     clearTimeout(idleTimer);
-    hike.watchId = hike.simTimer = hike.staleTimer = null;
+    hike.watchId = hike.simTimer = hike.clockTimer = null;
     hike.running = false;
     hike.lastFixAt = 0;
+    motion.pause(Date.now());
+    smoother.reset();
+    renderWalk();
     releaseWakeLock();
     exitDim();
     resetOffTrack();
@@ -533,8 +739,54 @@ $('settings-btn').addEventListener('click', () => {
     $('set-offtrack').value = settings.offTrackM;
     $('set-sound').checked = settings.sound;
     $('set-autodim').value = String(settings.autoDimS);
+    $('set-maxacc').value = settings.maxAccuracyM;
+    $('set-window').value = settings.smoothWindow;
+    $('set-stopradius').value = settings.stopRadiusM;
+    $('set-stoptime').value = settings.stopTimeS;
+    $('set-elethreshold').value = settings.eleThresholdM;
+    $('set-debug').checked = settings.debug;
     fillDeviceInfo();
     $('settings').showModal();
+});
+
+// Number fields: clamp to the field's min/max, save, then apply.
+function bindNumberSetting(id, key, apply) {
+    $(id).addEventListener('change', (e) => {
+        const { min, max } = e.target;
+        const value = Number(e.target.value);
+        settings[key] = Number.isFinite(value) && e.target.value !== ''
+            ? Math.min(Number(max), Math.max(Number(min), value))
+            : DEFAULT_SETTINGS[key];
+        e.target.value = settings[key];
+        saveSettings();
+        apply?.();
+    });
+}
+
+const applyTracking = () => {
+    smoother.configure({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
+    motion.configure({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS });
+};
+bindNumberSetting('set-maxacc', 'maxAccuracyM', applyTracking);
+bindNumberSetting('set-window', 'smoothWindow', applyTracking);
+bindNumberSetting('set-stopradius', 'stopRadiusM', applyTracking);
+bindNumberSetting('set-stoptime', 'stopTimeS', applyTracking);
+bindNumberSetting('set-elethreshold', 'eleThresholdM', () => {
+    if (!track) return;
+    track.profile = buildProfile(track, settings.eleThresholdM);
+    chart.setData(track, track.profile);
+    renderTrip();
+});
+
+$('set-debug').addEventListener('change', (e) => {
+    settings.debug = e.target.checked;
+    saveSettings();
+    if (!settings.debug) view.setDebug(null);
+    renderDebug();
+});
+
+$('reset-trip-btn').addEventListener('click', () => {
+    if (confirm('Reset walked distance and moving/stopped time to zero?')) resetTrip();
 });
 
 $('set-offtrack').addEventListener('change', (e) => {
@@ -578,6 +830,7 @@ $('sample-btn').addEventListener('click', async () => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const { name, points } = parseGpx(await response.text());
         await setTrack(name, points);
+        resetTrip();
         $('settings').close();
     } catch (err) {
         console.error('Sample load failed:', err);
@@ -607,6 +860,7 @@ $('test-loop-btn').addEventListener('click', () => {
         }
         points.push({ lat, lon, ele: null });
         setTrack('Test loop', points);
+        resetTrip();
         $('settings').close();
         toast('Test loop created: north, east, south, back to start.');
     }, onGeoError, { enableHighAccuracy: true, timeout: 20_000 });
@@ -664,4 +918,6 @@ document.addEventListener('visibilitychange', () => {
 if (SIMULATE) toast('Simulation mode: Start replays the track with a detour.', 5000);
 renderTrackStatus();
 renderStats();
+renderWalk();
+renderDebug();
 restoreTrack();
