@@ -94,3 +94,60 @@ test('motion: slow walking (0.7 m/s, steep climb pace) is not mistaken for a sto
         assert.equal(t.update({ lat: 40 + 0.7 * s * M, lon: 18 }, 5, s * 1000), null);
     }
 });
+
+// 1.2 km/h horizontal = 0.333 m/s: only 10 m covered in 30 s, inside the 15 m limit.
+// On a 40% slope that is 4 m of climbing per 30 s (480 m/h, a steep-climb pace).
+function steepClimb(t, withElevation) {
+    const speed = 1.2 / 3.6, grade = 0.4;
+    const changes = [];
+    t.start(0);
+    for (let s = 1; s <= 180; s++) {
+        const x = speed * s;
+        const r = t.update({ lat: 40 + x * M, lon: 18 }, 5, s * 1000, withElevation ? 500 + grade * x : null);
+        if (r) changes.push(r);
+    }
+    return changes;
+}
+
+test('motion: steep slow climb (1.2 km/h on a 40% slope) is not a stop', () => {
+    const t = new MotionTracker({ stopRadiusM: 15, stopTimeS: 30, stopClimbM: 3 });
+    assert.deepEqual(steepClimb(t, true), []);
+    assert.equal(t.state, 'MOVING');
+    assert.ok(t.walked > 55 && t.walked < 65, `walked ${t.walked}`);
+    assert.equal(t.stoppedMs, 0);
+});
+
+test('motion: without track elevations the same climb would count as a stop', () => {
+    const t = new MotionTracker({ stopRadiusM: 15, stopTimeS: 30, stopClimbM: 3 });
+    assert.ok(steepClimb(t, false).includes('stopped'));
+});
+
+test('motion: standing still on a steep slope is still a stop', () => {
+    const t = new MotionTracker({ stopRadiusM: 15, stopTimeS: 30, stopClimbM: 3 });
+    t.start(0);
+    // Smoothed jitter of ±2 m along a 40% slope moves the snapped elevation by ±0.8 m.
+    const jitter = [2, -1, 1, -2, 0, 2, -2, 1, -1, 0];
+    let changed = null;
+    for (let s = 1; s <= 40; s++) {
+        const x = jitter[s % 10];
+        changed = t.update({ lat: 40 + x * M, lon: 18 }, 5, s * 1000, 500 + 0.4 * x) || changed;
+    }
+    assert.equal(changed, 'stopped');
+});
+
+test('motion: snapshot and restore keep distance and clocks, paused', () => {
+    const t = new MotionTracker({ stopRadiusM: 15, stopTimeS: 30 });
+    t.start(0);
+    for (let s = 1; s <= 20; s++) t.update({ lat: 40 + s * M, lon: 18 }, 5, s * 1000);
+    const saved = JSON.parse(JSON.stringify(t.snapshot()));
+
+    const u = new MotionTracker({ stopRadiusM: 15, stopTimeS: 30 });
+    u.restore(saved);
+    assert.equal(u.walked, t.walked);
+    assert.equal(u.movingMs, 20_000);
+    assert.equal(u.lastTick, null); // paused until Start
+    // Continuing after a restart: the first new fix starts a new leg, no jump added.
+    u.start(100_000);
+    u.update({ lat: 41, lon: 18 }, 5, 101_000);
+    assert.equal(u.walked, t.walked);
+});

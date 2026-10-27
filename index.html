@@ -270,7 +270,7 @@
         #dim-hint { font-size: 13px; color: #444; margin-top: 24px; }
 
         /* ---- Settings dialog ---- */
-        #settings {
+        dialog {
             width: min(420px, calc(100% - 24px));
             max-height: calc(100% - 48px);
             border: 0;
@@ -281,10 +281,10 @@
             -webkit-user-select: text;
             user-select: text;
         }
-        #settings::backdrop { background: rgba(0,0,0,.45); }
-        #settings form { padding: 16px 18px 18px; }
-        #settings h2 { margin: 0 0 12px; font-size: 18px; }
-        #settings h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--panel-muted); }
+        dialog::backdrop { background: rgba(0,0,0,.45); }
+        dialog form { padding: 16px 18px 18px; }
+        dialog h2 { margin: 0 0 12px; font-size: 18px; }
+        dialog h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--panel-muted); }
         .field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
         .field input[type=number] { width: 90px; padding: 6px 8px; }
         .field input, .field select {
@@ -299,6 +299,8 @@
             background: var(--panel); color: var(--panel-text);
         }
         .actions button.danger { color: var(--danger); }
+        .actions button.primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); font-weight: 600; }
+        #resume-details { margin: 0 0 16px; line-height: 1.45; }
         .close-btn { width: 100%; margin-top: 16px; background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
         dl.info { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
         dl.info dt { color: var(--panel-muted); }
@@ -423,7 +425,10 @@
             <label class="field">…for at least (seconds)
                 <input type="number" id="set-stoptime" min="10" max="300" step="5" inputmode="numeric">
             </label>
-            <p class="hint">The distance grows to the GPS accuracy when that is worse. Very slow, steep climbing (under about 1.8 km/h on the map with the defaults) may count as stopped.</p>
+            <label class="field">…unless the track climbed more than (metres)
+                <input type="number" id="set-stopclimb" min="1" max="20" step="0.5" inputmode="decimal">
+            </label>
+            <p class="hint">The distance grows to the GPS accuracy when that is worse. The climb check stops slow, steep climbs from counting as stops: 3 m in 30 s is a climbing rate of 360 m/h. Lower it if slow climbs still show "Stopped"; it needs a track with elevations.</p>
 
             <h3>Elevation</h3>
             <label class="field">Ignore climbs/drops smaller than (metres)
@@ -435,6 +440,10 @@
             <label class="field">Debug view (raw vs smoothed GPS)
                 <input type="checkbox" id="set-debug">
             </label>
+            <label class="field">Simulated GPS (replays the track)
+                <input type="checkbox" id="set-simulate">
+            </label>
+            <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
             <div class="actions">
                 <button type="button" id="reset-trip-btn">Reset walked/time</button>
             </div>
@@ -461,6 +470,17 @@
             </div>
 
             <button class="close-btn" value="close">Done</button>
+        </form>
+    </dialog>
+
+    <dialog id="resume-dialog">
+        <form method="dialog">
+            <h2>Resume hike?</h2>
+            <p id="resume-details"></p>
+            <div class="actions">
+                <button type="button" id="resume-no">Start fresh</button>
+                <button type="button" class="primary-action" id="resume-yes" autofocus>Resume</button>
+            </div>
         </form>
     </dialog>
 

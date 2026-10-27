@@ -61,22 +61,27 @@ The steps are in the order you should run them.
 3. **Elevation, before starting.** With the sample track loaded, look at the panel above the toolbar.
    *Expect:* `7.30 km · ↑ 225 m · ↓ 223 m`, a profile chart, and the Total/Remaining columns filled (Done shows –). Drag a finger along the chart: it shows distance and elevation.
    Load one of your own GPX files that you also have in Maps 3D PRO and compare ascent/descent (see "Comparing with Maps 3D PRO" below).
-4. **Simulation.** Open the site with `?sim` added in Safari (a browser tab is fine for this), turn on Settings › Testing › Debug view, set Auto-dim to Never (so the screen stays on the map), load the sample track, press Start.
+4. **Simulation.** Turn on Settings › Testing › **Simulated GPS** (or open the site with `?sim` in a Safari tab), turn on Settings › Testing › Debug view, set Auto-dim to Never (so the screen stays on the map), load the sample track, press Start.
    *Expect:* Done/Remaining and the profile marker move. At about 1:50 the top bar shows **Stopped 0:30** and the timer keeps counting; Walked stays still. At about 2:05 it says Moving again.
    At about 3:30 a red OFF TRACK banner appears with a beep, then "Back on track". The debug box shows a few **DISCARDED** fixes (deliberate bad fixes).
-5. **Sound check.** Settings › turn Sound off and on: it beeps right away. Try it with the side ring/silent switch on and off, and note whether you hear it.
-6. **Real GPS.** Outdoors, from the Home Screen app: Settings › Test loop here, press Start, allow location.
+5. **Resume after a force-close.** In the Home Screen app: Settings › Testing › **Simulated GPS** on (the app reloads), load the sample track, press Start, and wait at least 30 s (Walked shows a distance). Swipe up to the app switcher and swipe Trails away. Reopen it from the Home Screen.
+   *Expect:* a **Resume hike?** box with your walked distance, moving/stopped time and progress. Tap **Resume**: the numbers continue from there, the hike is running, and the map shows the track and dot (if the map stays blank, tell me: that would be the map's background worker failing).
+   Repeat and tap **Start fresh**: everything resets, and the next reopen doesn't ask.
+   At most the last 10 s of a recording can be lost; time while the app was closed is not counted.
+   Afterwards, turn **Simulated GPS** off again (Settings › Testing) before any real walk.
+6. **Sound check.** Settings › turn Sound off and on: it beeps right away. Try it with the side ring/silent switch on and off, and note whether you hear it.
+7. **Real GPS.** Outdoors, from the Home Screen app: Settings › Test loop here, press Start, allow location.
    *Expect:* a blue dot with a pale accuracy circle and "GPS ±5–15 m". Walk the loop; Done increases.
    Walk about 60 m away from the line: within a few seconds you get the banner and a beep. Come back: it clears.
    **Stop test:** stand still for a minute. *Expect:* after 30 s "Stopped 0:30", Walked stops growing, and no off-track alarm. Walk on: "Moving", and Walked grows again.
    **Debug view** (Settings › Testing): orange dots are raw GPS fixes, blue dots the smoothed position, red rings discarded fixes, and a purple dashed circle the stop area. The blue trail should be steadier than the orange, about 2 s behind you.
-7. **Wake Lock.** While hiking, the top bar shows **Screen awake**. Leave the phone untouched for 2 minutes.
+8. **Wake Lock.** While hiking, the top bar shows **Screen awake**. Leave the phone untouched for 2 minutes.
    *Expect:* after 1 minute the screen goes black with large dim numbers (auto-dim), but the phone does **not** lock.
-8. **Background.** Press Start, switch to another app for 1 minute, come back.
+9. **Background.** Press Start, switch to another app for 1 minute, come back.
    *Expect:* "Screen awake" again, and GPS updates resume (the status may briefly say "no fix for N s"). GPS does **not** run while the app is in the background: this is an iOS limit.
-9. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
+10. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
    *Expect:* the app opens, with your track and live position. The map background may be blank: offline map tiles are not built yet.
-10. **Update.** After a new version is published, open the app with signal.
+11. **Update.** After a new version is published, open the app with signal.
    *Expect:* a "New version installed — Reload" banner. Settings › App version shows the new number.
 
 ### If Wake Lock fails
@@ -105,3 +110,4 @@ Ascent/descent are counted with a **5 m threshold**: a climb or drop only counts
 | Average the last N fixes | 5 (≈2 s / ≈3 m lag) | the dot is jittery | the dot trails too far behind you |
 | Stopped when within | 15 m | short stops are missed | slow climbs are marked "Stopped" |
 | …for at least | 30 s | brief pauses count as stops | you want stops recognised sooner |
+| …unless the track climbed more than | 3 m (= 360 m/h) | standing on a steep slope isn't detected as a stop | slow steep climbs still show "Stopped" |

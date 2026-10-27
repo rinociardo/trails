@@ -10,8 +10,6 @@ import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 // the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
 // 3D terrain with MapLibre's demo elevation tiles.
 const params = new URLSearchParams(location.search);
-const SIMULATE = params.has('sim');
-const SIM_SPEEDUP = Math.max(1, Number(params.get('sim')) || 10);
 const terrain = params.get('terrain') === 'demo' ? DEMO_TERRAIN : TERRAIN;
 
 const DEFAULT_CENTER = { lat: 40.5, lon: 18.0 };
@@ -29,8 +27,10 @@ const DEFAULT_SETTINGS = {
     smoothWindow: DEFAULT_TRACKING.windowSize,
     stopRadiusM: DEFAULT_TRACKING.stopRadiusM,
     stopTimeS: DEFAULT_TRACKING.stopTimeS,
+    stopClimbM: DEFAULT_TRACKING.stopClimbM,
     eleThresholdM: DEFAULT_ELEVATION_THRESHOLD_M,
     debug: false,
+    simulate: false,
     panelOpen: true,
 };
 
@@ -55,6 +55,11 @@ function saveSettings() {
 }
 
 const settings = loadSettings();
+
+// Simulated GPS: ?sim in the address, or Settings › Testing (needed for the Home
+// Screen app, which always opens the plain address).
+const SIMULATE = params.has('sim') || settings.simulate;
+const SIM_SPEEDUP = Math.max(1, Number(params.get('sim')) || 10);
 
 // ---------- Track storage (IndexedDB: GPX tracks can be large) ----------
 
@@ -159,7 +164,7 @@ const chart = createProfileChart($('profile'));
 let track = null; // { name, points, cum, total, profile } (profile null without elevations)
 
 const smoother = new PositionSmoother({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
-const motion = new MotionTracker({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS });
+const motion = new MotionTracker({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS, stopClimbM: settings.stopClimbM });
 
 const hike = {
     running: false,
@@ -292,7 +297,8 @@ function renderDebug() {
         raw && sm ? `Raw→smooth ${haversine(raw, sm).toFixed(1)} m` : 'Raw→smooth –',
         stopped
             ? `Stop     inside ${Math.round(motion.radius)} m of stop centre`
-            : `Stop chk spread ${motion.history.length > 1 ? Math.round(motion.spread()) : 0} m of ${Math.round(motion.radius)} m, need ${settings.stopTimeS} s`,
+            : `Stop chk spread ${motion.history.length > 1 ? Math.round(motion.spread()) : 0} m of ${Math.round(motion.radius)} m, ` +
+              `climb ${motion.climb().toFixed(1)} m of ${settings.stopClimbM} m, need ${settings.stopTimeS} s`,
         hike.progress ? `Snapped  ${formatDistance(hike.progress.along)}, ${formatMetres(hike.progress.offset)} off` : 'Snapped  –',
         `Walked   ${formatDistance(motion.walked)}`,
     ];
@@ -320,6 +326,77 @@ function resetTrip() {
     debug.discarded = 0;
     renderWalk();
     renderDebug();
+    saveRecording();
+}
+
+// ---------- Recording persistence (survives iOS closing the app) ----------
+
+const RECORDING_SAVE_EVERY_S = 10;
+
+// Identifies the loaded track, so progress is only restored onto the same one.
+function trackKey() {
+    return track ? `${track.name}|${track.points.length}|${Math.round(track.total)}` : null;
+}
+
+// Saved every 10 s while hiking, on every moving/stopped change, on Start/Stop,
+// and when the app goes to the background (the last chance before a force-close).
+function saveRecording() {
+    motion.tick(Date.now());
+    const record = {
+        trackKey: trackKey(),
+        running: hike.running,
+        motion: motion.snapshot(),
+        prevAlong: hike.prevAlong,
+        progress: hike.progress,
+        savedAt: Date.now(),
+    };
+    kvSet('recording', record).catch((err) => console.error('Saving recording failed:', err));
+}
+
+async function restoreRecording() {
+    let saved;
+    try {
+        saved = await kvGet('recording');
+    } catch (err) {
+        console.error('Loading recording failed:', err);
+        return;
+    }
+    if (!saved || saved.motion.movingMs + saved.motion.stoppedMs === 0) return;
+
+    const apply = () => {
+        motion.restore(saved.motion);
+        if (saved.trackKey && saved.trackKey === trackKey() && saved.progress) {
+            hike.prevAlong = saved.prevAlong;
+            hike.progress = saved.progress;
+        }
+        renderStats();
+        renderWalk();
+    };
+    // Stopped on purpose last time: just bring the numbers back.
+    if (!saved.running) {
+        apply();
+        return;
+    }
+
+    const ago = Math.max(0, Date.now() - saved.savedAt);
+    const sameTrack = saved.trackKey === trackKey();
+    setText($('resume-details'),
+        `Walked ${formatDistance(saved.motion.walked)} · moving ${formatDuration(saved.motion.movingMs)} · ` +
+        `stopped ${formatDuration(saved.motion.stoppedMs)}` +
+        (sameTrack && saved.progress ? ` · ${formatDistance(saved.progress.along)} along ${track.name || 'the track'}` : '') +
+        `. Saved ${ago < 60_000 ? 'less than a minute' : `${Math.round(ago / 60_000)} min`} ago; ` +
+        'time while the app was closed is not counted.');
+    $('resume-dialog').showModal();
+    // Handled on the tap itself, so Start may use Wake Lock and sound.
+    $('resume-yes').onclick = () => {
+        $('resume-dialog').close();
+        apply();
+        startHike();
+    };
+    $('resume-no').onclick = () => {
+        $('resume-dialog').close();
+        kvDelete('recording').catch(() => {});
+    };
 }
 
 async function setTrack(name, points, { save = true } = {}) {
@@ -561,13 +638,16 @@ function onFix(position) {
     pushLimited(debug.smooth, smoothed);
     setStatus($('gps-status'), `GPS ±${Math.round(raw.acc)} m`, 'ok');
 
-    motion.update(smoothed, raw.acc, now);
+    // Snap first (while moving): stop detection uses the track elevation here
+    // to tell a slow steep climb from a stop.
+    const loc = track && motion.state !== 'STOPPED' ? locateOnTrack(track, smoothed, hike.prevAlong) : null;
+    const ele = loc && track.profile ? profileAt(track, track.profile, loc.along).ele : null;
+    if (motion.update(smoothed, raw.acc, now, ele)) saveRecording();
     const stopped = motion.state === 'STOPPED';
 
     // While stopped, progress and position stay frozen at the stop's centre,
     // so jitter can neither move the numbers nor raise an off-track alarm.
-    if (track && !stopped) {
-        const loc = locateOnTrack(track, smoothed, hike.prevAlong);
+    if (loc && !stopped) {
         hike.prevAlong = loc.along;
         hike.progress = { along: loc.along, offset: loc.offset };
         updateOffTrack(loc.offset);
@@ -613,7 +693,9 @@ function startSimulation() {
     const stopAt = track.total * 0.15;
     const detourStart = track.total * 0.30;
     const detourEnd = track.total * 0.38;
-    let along = 0, stopLeft = 45, tick = 0;
+    // Continue from the current progress (after Stop/Start or a resumed hike).
+    let along = hike.progress?.along ?? 0, tick = 0;
+    let stopLeft = along > stopAt ? 0 : 45;
     const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
 
     hike.simTimer = setInterval(() => {
@@ -677,12 +759,15 @@ function startHike() {
         });
     }
     // Once a second: running clocks (moving/stopped timer) and the stale-GPS check.
+    let ticks = 0;
     hike.clockTimer = setInterval(() => {
         renderWalk();
         checkStaleFix();
+        if (++ticks % RECORDING_SAVE_EVERY_S === 0) saveRecording();
     }, 1000);
     renderWalk();
     resetIdleTimer();
+    saveRecording();
 }
 
 // Stop pauses the recording; Start continues it (Settings › Reset walked/time).
@@ -697,6 +782,7 @@ function stopHike() {
     motion.pause(Date.now());
     smoother.reset();
     renderWalk();
+    saveRecording();
     releaseWakeLock();
     exitDim();
     resetOffTrack();
@@ -743,8 +829,11 @@ $('settings-btn').addEventListener('click', () => {
     $('set-window').value = settings.smoothWindow;
     $('set-stopradius').value = settings.stopRadiusM;
     $('set-stoptime').value = settings.stopTimeS;
+    $('set-stopclimb').value = settings.stopClimbM;
     $('set-elethreshold').value = settings.eleThresholdM;
     $('set-debug').checked = settings.debug;
+    $('set-simulate').checked = SIMULATE;
+    $('set-simulate').disabled = params.has('sim');
     fillDeviceInfo();
     $('settings').showModal();
 });
@@ -765,12 +854,13 @@ function bindNumberSetting(id, key, apply) {
 
 const applyTracking = () => {
     smoother.configure({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
-    motion.configure({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS });
+    motion.configure({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS, stopClimbM: settings.stopClimbM });
 };
 bindNumberSetting('set-maxacc', 'maxAccuracyM', applyTracking);
 bindNumberSetting('set-window', 'smoothWindow', applyTracking);
 bindNumberSetting('set-stopradius', 'stopRadiusM', applyTracking);
 bindNumberSetting('set-stoptime', 'stopTimeS', applyTracking);
+bindNumberSetting('set-stopclimb', 'stopClimbM', applyTracking);
 bindNumberSetting('set-elethreshold', 'eleThresholdM', () => {
     if (!track) return;
     track.profile = buildProfile(track, settings.eleThresholdM);
@@ -783,6 +873,17 @@ $('set-debug').addEventListener('change', (e) => {
     saveSettings();
     if (!settings.debug) view.setDebug(null);
     renderDebug();
+});
+
+// Switching GPS source needs a fresh start; not offered mid-hike.
+$('set-simulate').addEventListener('change', (e) => {
+    if (hike.running) {
+        e.target.checked = SIMULATE;
+        return toast('Stop the hike first.');
+    }
+    settings.simulate = e.target.checked;
+    saveSettings();
+    location.reload();
 });
 
 $('reset-trip-btn').addEventListener('click', () => {
@@ -905,7 +1006,10 @@ $('update-btn').addEventListener('click', async () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible') {
+        if (hike.running) saveRecording();
+        return;
+    }
     // iOS drops the wake lock and pauses audio when the app goes to the background.
     if (hike.running && !wakeLock) requestWakeLock();
     audioCtx?.resume().catch(() => {});
@@ -915,9 +1019,9 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- Start-up ----------
 
-if (SIMULATE) toast('Simulation mode: Start replays the track with a detour.', 5000);
+if (SIMULATE) toast('Simulated GPS is on: Start replays the track. Turn it off in Settings › Testing.', 5000);
 renderTrackStatus();
 renderStats();
 renderWalk();
 renderDebug();
-restoreTrack();
+restoreTrack().then(restoreRecording);

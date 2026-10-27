@@ -8,6 +8,7 @@ export const DEFAULT_TRACKING = {
     windowSize: 5,     // good fixes averaged into one smoothed position
     stopRadiusM: 15,   // stopped = staying within max(this, current accuracy)...
     stopTimeS: 30,     // ...for this long
+    stopClimbM: 3,     // ...unless the track elevation changed more than this (slow steep climb)
 };
 
 // Old fixes never enter the average, e.g. after the app was in the background.
@@ -57,15 +58,18 @@ export class PositionSmoother {
 // stop's centre (the rest was GPS jitter).
 // STOPPED -> MOVING when a position is farther than that from the stop's centre;
 // the distance from the centre to that point is counted, and recording goes on from there.
+// Slow steep climbs: if the track elevation at the snapped position changed by
+// more than stopClimbM within the window, it is a climb, not a stop.
 export class MotionTracker {
     constructor(options = {}) {
         this.configure({ ...DEFAULT_TRACKING, ...options });
         this.reset();
     }
 
-    configure({ stopRadiusM, stopTimeS }) {
+    configure({ stopRadiusM, stopTimeS, stopClimbM = DEFAULT_TRACKING.stopClimbM }) {
         this.stopRadiusM = stopRadiusM;
         this.stopTimeMs = stopTimeS * 1000;
+        this.stopClimbM = stopClimbM;
     }
 
     reset() {
@@ -76,7 +80,7 @@ export class MotionTracker {
         this.stoppedSince = null;
         this.anchor = null;
         this.radius = this.stopRadiusM;
-        this.history = [];   // { lat, lon, time, walked } while moving
+        this.history = [];   // { lat, lon, ele, time, walked } while moving
         this.lastPoint = null;
         this.lastTick = null; // null while paused
     }
@@ -107,9 +111,10 @@ export class MotionTracker {
         this.lastTick = now;
     }
 
-    // pos: smoothed position; acc: accuracy of the current fix.
+    // pos: smoothed position; acc: accuracy of the current fix; ele: track
+    // elevation at the snapped position (null without a track or elevations).
     // Returns 'stopped' or 'resumed' on a state change, otherwise null.
-    update(pos, acc, now) {
+    update(pos, acc, now, ele = null) {
         this.tick(now);
         this.radius = Math.max(this.stopRadiusM, acc || 0);
 
@@ -121,13 +126,13 @@ export class MotionTracker {
             this.stoppedSince = null;
             this.anchor = null;
             this.lastPoint = { lat: pos.lat, lon: pos.lon };
-            this.history = [{ lat: pos.lat, lon: pos.lon, time: now, walked: this.walked }];
+            this.history = [{ lat: pos.lat, lon: pos.lon, ele, time: now, walked: this.walked }];
             return 'resumed';
         }
 
         if (this.lastPoint) this.walked += haversine(this.lastPoint, pos);
         this.lastPoint = { lat: pos.lat, lon: pos.lon };
-        this.history.push({ lat: pos.lat, lon: pos.lon, time: now, walked: this.walked });
+        this.history.push({ lat: pos.lat, lon: pos.lon, ele, time: now, walked: this.walked });
         return this.checkStop(now);
     }
 
@@ -146,6 +151,7 @@ export class MotionTracker {
         this.history = this.history.slice(first);
 
         if (this.spread() > this.radius) return null;
+        if (this.climb() > this.stopClimbM) return null;
 
         const centre = this.centre();
         const start = this.history[0];
@@ -180,5 +186,24 @@ export class MotionTracker {
             for (let j = i + 1; j < h.length; j++) max = Math.max(max, haversine(h[i], h[j]));
         }
         return max;
+    }
+
+    // Track elevation change (max - min) over the watched positions; 0 when unknown.
+    climb() {
+        const eles = this.history.map((p) => p.ele).filter(Number.isFinite);
+        return eles.length > 1 ? Math.max(...eles) - Math.min(...eles) : 0;
+    }
+
+    // What must survive the app being closed: distance and clocks.
+    snapshot() {
+        return { walked: this.walked, movingMs: this.movingMs, stoppedMs: this.stoppedMs };
+    }
+
+    // Restores a snapshot as a paused recording; Start continues it.
+    restore({ walked, movingMs, stoppedMs }) {
+        this.reset();
+        this.walked = walked;
+        this.movingMs = movingMs;
+        this.stoppedMs = stoppedMs;
     }
 }

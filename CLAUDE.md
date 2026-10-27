@@ -85,8 +85,14 @@ wanted eventually.
 - STOPPED when all positions of the last **30 s** lie within **max(15 m, current accuracy)**
   of each other: walked distance freezes, "Stopped" shows with a timer.
   Decision: measured point-to-point (not as a radius from the centre), otherwise a 1 m/s
-  walk counts as stopped. Consequence: below ≈1.8 km/h horizontal (very steep climbs) may
-  count as stopped with the defaults.
+  walk counts as stopped. Consequence: below ≈1.8 km/h horizontal could count as stopped,
+  hence the climb check below.
+- **Slow steep climbs are not stops** (decided 2026-10-27, v0.3.1): no STOPPED if the track
+  elevation at the snapped position changed by more than **3 m** (setting) within the
+  window. 3 m per 30 s = 360 m/h of climbing; slower climbs can still register as stopped
+  (lower the setting). Needs a track with elevations; snapping now happens before stop
+  detection for this reason. Unit-tested: 1.2 km/h on a 40% slope stays MOVING; standing
+  still on that slope is still a stop.
 - MOVING again when I leave that distance from the stop's centre; counting continues from
   there. Decision: the real distance (approach to the stop centre, and centre to the exit
   point) is kept, so stops don't lose up to ~30 m each.
@@ -94,8 +100,19 @@ wanted eventually.
 - Two separate distances: progress along the planned track (from snapping) and distance
   actually walked (recorded, with stop detection).
 - No off-track alarms from jitter while stopped (position and progress are frozen).
-- Radius and time are settings. Stop/Start pauses and resumes the recording; "Reset
+- Radius, time and climb are settings. Stop/Start pauses and resumes the recording; "Reset
   walked/time" in Settings starts it again (also reset when a new track is loaded).
+
+### Recording persistence (done in v0.3.1)
+- The walked/time recording (plus progress along the track) is saved to IndexedDB every
+  **10 s** while hiking, on every MOVING/STOPPED change, on Start/Stop/reset, and when the
+  app goes to the background.
+- On reopening: if the hike was running, a **"Resume hike?"** prompt (Resume / Start
+  fresh); if it had been stopped, the numbers are restored quietly. Progress is only
+  restored onto the same track. Time while the app was closed is not counted; at most
+  the last 10 s can be lost.
+- Test plan step: start a simulated hike, force-close from the app switcher, reopen,
+  check it resumes (README, step 5).
 
 ### Debug view (done in v0.3.0)
 - Toggle in Settings › Testing. Map shows raw fixes (orange), discarded fixes (red rings),
@@ -103,7 +120,8 @@ wanted eventually.
   state, accuracies, fixes used/discarded, raw-to-smoothed distance, stop check, snapped
   progress and walked distance.
 - `?sim` simulation includes GPS noise, bad fixes, a 45 s stop and a detour
-  (`?sim=N` sets N× walking speed, default 10).
+  (`?sim=N` sets N× walking speed, default 10). Also switchable in Settings › Testing ›
+  Simulated GPS, because the Home Screen app always opens the plain address.
 
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
@@ -132,5 +150,5 @@ wanted eventually.
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
 - Pure logic lives in `geo.js`, `elevation.js`, `tracker.js` and is unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node.
-- Known gap: the walked distance/time recording lives in memory only; if iOS closes the
-  app, it starts from zero.
+- Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
+  distance walked in that time is missing from the recording.
