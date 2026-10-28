@@ -151,6 +151,26 @@ wanted eventually.
   (README step 10). Verified in a headless browser: re-imported track gives identical
   totals.
 - `.gitignore` still blocks all personal `*.gpx` files.
+- Not yet: showing the walked path as a line on the map (only the position dot and, in the
+  debug view, recent fixes are drawn).
+
+### Free recording (done in v0.5.0, requested 2026-10-28)
+- **Start works with no track loaded**: records the walk with smoothing, stop detection,
+  walked distance, moving/stopped time, average speed and the debug view.
+- Nothing to compare against, so progress/remaining/off-track parts are **hidden, not shown
+  as zeros**: the top bar shows Walked / Moving / Avg speed instead of Done / Remaining /
+  From track (also on the dim screen); the trip panel hides the done/remaining table and the
+  profile. No off-track alerts. The debug box says "Climb – (no track)".
+- Survives a force-close like a normal hike (same recording save and "Resume hike?").
+- **Export my hike** works: file `Free-recording_<date>.gpx`. No elevations (GPS altitude
+  stays unused); the file says so in `<desc>` ("No elevation data…") in `<metadata>` and
+  `<trk>`. The same note is written for any recorded hike with no elevation at all. Later:
+  fill from a DEM.
+- Loading a track resets the recording (as before), so export a free walk first.
+- Simulated GPS with no track walks a 2 km square (10 points per side) from the last
+  recorded point, or the map centre, so free recording can be tested without walking.
+- "Test loop here" creates a track **without elevations** (label says so): the Climb line,
+  ascent/descent and profile stay empty with it.
 
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available

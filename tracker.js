@@ -276,6 +276,11 @@ export class PathRecorder {
         return this.segments.reduce((n, seg) => n + seg.length, 0);
     }
 
+    // False for a free recording (no track): no point has an elevation.
+    get hasElevations() {
+        return this.segments.some((seg) => seg.some((p) => Number.isFinite(p.ele)));
+    }
+
     get startTime() {
         return this.segments.find((seg) => seg.length)?.[0].time ?? null;
     }

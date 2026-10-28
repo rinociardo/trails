@@ -1,5 +1,5 @@
 import { buildTrack, locateOnTrack, pointAtDistance, haversine } from './geo.js';
-import { parseGpx, buildGpx, gpxFileName } from './gpx.js';
+import { parseGpx, buildGpx, gpxFileName, NO_ELEVATION_DESC } from './gpx.js';
 import { buildProfile, profileAt, DEFAULT_ELEVATION_THRESHOLD_M } from './elevation.js';
 import { PositionSmoother, MotionTracker, PathRecorder, DEFAULT_TRACKING, trimToWindow, elevationRange } from './tracker.js';
 import { createMapView } from './map-view.js';
@@ -239,7 +239,7 @@ function renderTrip() {
     setText($('t-desc-total'), prof ? formatMetres(prof.totalDescent) : '–');
     setText($('dim-climb'), prof ? formatMetres(prof.totalAscent - at.ascentDone) : '–');
 
-    let summary = 'No track loaded';
+    let summary = 'No track · Start records your walk';
     if (track) {
         summary = prof
             ? `${formatDistance(track.total)} · ↑ ${formatMetres(prof.totalAscent)} · ↓ ${formatMetres(prof.totalDescent)}`
@@ -253,12 +253,24 @@ function renderTrip() {
 function renderWalk(now = Date.now()) {
     motion.tick(now);
     const recorded = motion.movingMs + motion.stoppedMs > 0;
-    setText($('w-walked'), recorded ? formatDistance(motion.walked) : '–');
-    setText($('w-moving'), recorded ? formatDuration(motion.movingMs) : '–');
-    setText($('w-stopped'), recorded ? formatDuration(motion.stoppedMs) : '–');
+    const walked = recorded ? formatDistance(motion.walked) : '–';
+    const moving = recorded ? formatDuration(motion.movingMs) : '–';
     // Average speed over moving time only; meaningless in the first minute.
     const hours = motion.movingMs / 3_600_000;
-    setText($('w-speed'), motion.movingMs >= 60_000 ? `${(motion.walked / 1000 / hours).toFixed(1)} km/h` : '–');
+    const speed = motion.movingMs >= 60_000 ? `${(motion.walked / 1000 / hours).toFixed(1)} km/h` : '–';
+    setText($('w-walked'), walked);
+    setText($('w-moving'), moving);
+    setText($('w-stopped'), recorded ? formatDuration(motion.stoppedMs) : '–');
+    setText($('w-speed'), speed);
+    // Free recording (no track): these replace Done/Remaining/From track.
+    if (!track) {
+        setText($('stat-walked'), walked);
+        setText($('stat-moving'), moving);
+        setText($('stat-speed'), speed);
+        setText($('dim-walked'), walked);
+        setText($('dim-moving'), moving);
+        setText($('dim-speed'), speed);
+    }
 
     const status = $('motion-status');
     status.hidden = !hike.running;
@@ -268,11 +280,14 @@ function renderWalk(now = Date.now()) {
     setText($('dim-motion'), hike.running ? text : '');
 }
 
+// No track loaded = free recording: Start still records the walk, and the
+// parts that compare against a track are hidden.
 function renderTrackStatus() {
-    const text = track
-        ? `${track.name || 'Track'} · ${formatDistance(track.total)}`
-        : 'No track — tap Open GPX';
+    document.body.classList.toggle('free-mode', !track);
+    let text = hike.running ? 'Free recording (no track)' : 'No track — Open GPX, or Start to record';
+    if (track) text = `${track.name || 'Track'} · ${formatDistance(track.total)}`;
     setText($('track-status'), text);
+    renderWalk();
 }
 
 function pushLimited(list, item) {
@@ -284,7 +299,8 @@ function pushLimited(list, item) {
 // a slow climb can be compared with standing still on a slope to pick the
 // "...unless the track climbed more than" setting (a stop needs the change at or below it).
 function climbLine(now) {
-    if (!track?.profile) return 'Climb    – (track has no elevations)';
+    if (!track) return 'Climb    – (no track)';
+    if (!track.profile) return 'Climb    – (track has no elevations)';
     const w = trimToWindow(debug.eles, now, settings.stopTimeS * 1000);
     if (w.length < 2) return `Climb    – (waiting for fixes)`;
     const range = elevationRange(w);
@@ -397,6 +413,7 @@ async function restoreRecording() {
         }
         renderStats();
         renderWalk();
+        renderDebug();
     };
     // Stopped on purpose last time: just bring the numbers back.
     if (!saved.running) {
@@ -724,33 +741,62 @@ function checkStaleFix() {
     }
 }
 
-// Replays the loaded track at SIM_SPEEDUP × walking pace (1.4 m/s), one fix per
-// second, with realistic GPS noise (±4 m scatter, accuracy 5–15 m, an occasional
-// ±45 m fix that must be discarded), a 45 s stop at 15% of the way and a detour
-// of up to 120 m to the side at 30–38%.
-function startSimulation() {
+// Square loop starting at origin, going north, east, south and back, with a
+// point every tenth of a side.
+function squareLoop({ lat, lon }, sideM) {
+    const dLat = sideM / 111320;
+    const dLon = sideM / (111320 * Math.cos(lat * Math.PI / 180));
+    const corners = [[0, 0], [dLat, 0], [dLat, dLon], [0, dLon], [0, 0]];
+    const points = [];
+    for (let c = 0; c < corners.length - 1; c++) {
+        for (let s = 0; s < 10; s++) {
+            const f = s / 10;
+            points.push({
+                lat: lat + corners[c][0] + f * (corners[c + 1][0] - corners[c][0]),
+                lon: lon + corners[c][1] + f * (corners[c + 1][1] - corners[c][1]),
+                ele: null,
+            });
+        }
+    }
+    points.push({ lat, lon, ele: null });
+    return points;
+}
+
+// Free recording has no track to replay: walk a 2 km square from where the
+// recording left off (so Stop/Start and Resume carry on there), else the map centre.
+function freeSimRoute() {
+    const last = path.segments.flat().at(-1);
+    return buildTrack(squareLoop(last ?? hike.lastFix ?? view.getCenter(), 500));
+}
+
+// Replays route (the loaded track, or a test square in free recording) at
+// SIM_SPEEDUP × walking pace (1.4 m/s), one fix per second, with realistic GPS
+// noise (±4 m scatter, accuracy 5–15 m, an occasional ±45 m fix that must be
+// discarded), a 45 s stop at 15% of the way and a detour of up to 120 m to the
+// side at 30–38%.
+function startSimulation(route) {
     const speed = 1.4 * SIM_SPEEDUP;
-    const stopAt = track.total * 0.15;
-    const detourStart = track.total * 0.30;
-    const detourEnd = track.total * 0.38;
+    const stopAt = route.total * 0.15;
+    const detourStart = route.total * 0.30;
+    const detourEnd = route.total * 0.38;
     // Continue from the current progress (after Stop/Start or a resumed hike).
-    let along = hike.progress?.along ?? 0, tick = 0;
+    let along = route === track ? hike.progress?.along ?? 0 : 0, tick = 0;
     let stopLeft = along > stopAt ? 0 : 45;
     const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
 
     hike.simTimer = setInterval(() => {
         tick++;
         if (along >= stopAt && stopLeft > 0) stopLeft--;
-        else along = Math.min(track.total, along + speed);
+        else along = Math.min(route.total, along + speed);
 
-        const p = pointAtDistance(track, along);
+        const p = pointAtDistance(route, along);
         let side = 0;
         if (along > detourStart && along < detourEnd) {
             const f = (along - detourStart) / (detourEnd - detourStart);
             side = 120 * (1 - Math.abs(2 * f - 1));
         }
         // Shift sideways, perpendicular to the current segment, then add noise.
-        const a = track.points[p.index], b = track.points[p.index + 1];
+        const a = route.points[p.index], b = route.points[p.index + 1];
         const cosLat = Math.cos(p.lat * Math.PI / 180);
         const dx = (b.lon - a.lon) * cosLat, dy = b.lat - a.lat;
         const len = Math.hypot(dx, dy) || 1;
@@ -764,7 +810,7 @@ function startSimulation() {
                 accuracy,
             },
         });
-        if (along >= track.total) {
+        if (along >= route.total) {
             clearInterval(hike.simTimer);
             hike.simTimer = null;
             toast('Simulation finished.');
@@ -773,10 +819,6 @@ function startSimulation() {
 }
 
 function startHike() {
-    if (SIMULATE && !track) {
-        toast('Load a track first, then press Start to simulate.');
-        return;
-    }
     if (!SIMULATE && !('geolocation' in navigator)) {
         toast('This browser cannot access GPS.');
         return;
@@ -786,12 +828,13 @@ function startHike() {
     view.setFollow(true);
     $('start-btn').textContent = 'Stop';
     $('start-btn').classList.add('running');
+    renderTrackStatus();
     setStatus($('gps-status'), SIMULATE ? 'Simulating GPS' : 'Waiting for GPS…', 'warn');
     requestWakeLock();
     motion.start(Date.now());
     path.startSegment();
     if (SIMULATE) {
-        startSimulation();
+        startSimulation(track ?? freeSimRoute());
     } else {
         hike.watchId = navigator.geolocation.watchPosition(onFix, onGeoError, {
             enableHighAccuracy: true,
@@ -830,6 +873,7 @@ function stopHike() {
     resetOffTrack();
     $('start-btn').textContent = 'Start';
     $('start-btn').classList.remove('running');
+    renderTrackStatus();
     setStatus($('gps-status'), 'GPS off');
     renderStats();
 }
@@ -999,9 +1043,12 @@ $('export-track-btn').addEventListener('click', () => {
 $('export-hike-btn').addEventListener('click', () => {
     if (path.pointCount < 2) return toast('Nothing recorded yet: press Start and walk a little.');
     const start = path.startTime;
-    const base = track?.name || 'Hike';
-    exportGpx(buildGpx({ name: `${base} (walked)`, segments: path.snapshot(), time: start }),
-        gpxFileName(`${base} walked`, start), `${base} (walked)`);
+    const base = track?.name || 'Free recording';
+    const name = track ? `${base} (walked)` : base;
+    // Free recordings (or a track without elevations): say so, to fill from a DEM later.
+    const desc = path.hasElevations ? '' : NO_ELEVATION_DESC;
+    exportGpx(buildGpx({ name, desc, segments: path.snapshot(), time: start }),
+        gpxFileName(track ? `${base} walked` : base, start), name);
 });
 
 $('clear-btn').addEventListener('click', () => {
@@ -1024,30 +1071,16 @@ $('sample-btn').addEventListener('click', async () => {
 });
 
 // A square loop (~200 m sides) starting where you stand, for a walk-around test.
+// No elevations: the Climb line and ascent/descent stay empty with it.
 $('test-loop-btn').addEventListener('click', () => {
     if (!('geolocation' in navigator)) return toast('This browser cannot access GPS.');
     toast('Getting your position…', 10_000);
     navigator.geolocation.getCurrentPosition((pos) => {
-        const { latitude: lat, longitude: lon } = pos.coords;
-        const dLat = 200 / 111320;
-        const dLon = 200 / (111320 * Math.cos(lat * Math.PI / 180));
-        const corners = [[0, 0], [dLat, 0], [dLat, dLon], [0, dLon], [0, 0]];
-        const points = [];
-        for (let c = 0; c < corners.length - 1; c++) {
-            for (let s = 0; s < 10; s++) {
-                const f = s / 10;
-                points.push({
-                    lat: lat + corners[c][0] + f * (corners[c + 1][0] - corners[c][0]),
-                    lon: lon + corners[c][1] + f * (corners[c + 1][1] - corners[c][1]),
-                    ele: null,
-                });
-            }
-        }
-        points.push({ lat, lon, ele: null });
+        const points = squareLoop({ lat: pos.coords.latitude, lon: pos.coords.longitude }, 200);
         setTrack('Test loop', points);
         resetTrip();
         $('settings').close();
-        toast('Test loop created: north, east, south, back to start.');
+        toast('Test loop created: north, east, south, back to start. It has no elevations.');
     }, onGeoError, { enableHighAccuracy: true, timeout: 20_000 });
 });
 

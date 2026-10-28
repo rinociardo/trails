@@ -41,10 +41,15 @@ export function parseGpx(text) {
 const escapeXml = (s) => String(s).replace(/[<>&"']/g, (c) =>
     ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]);
 
+// Written as the description of hikes recorded without elevations (free
+// recording), so the file says why <ele> is missing; elevations can be filled
+// from a DEM (Digital Elevation Model) later.
+export const NO_ELEVATION_DESC = 'No elevation data (GPS altitude is not used). Elevations can be added later from a DEM.';
+
 // GPX 1.1 text for one track. segments: arrays of { lat, lon, ele?, time? }
 // (time in ms); each segment becomes a <trkseg> (a recorded hike has one per
 // Start/Stop). Elevations and times are written when present.
-export function buildGpx({ name = '', segments, time = Date.now() }) {
+export function buildGpx({ name = '', desc = '', segments, time = Date.now() }) {
     const point = (p) => {
         let inner = '';
         if (Number.isFinite(p.ele)) inner += `<ele>${p.ele.toFixed(1)}</ele>`;
@@ -52,14 +57,15 @@ export function buildGpx({ name = '', segments, time = Date.now() }) {
         return `      <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lon.toFixed(7)}">${inner}</trkpt>`;
     };
     const nameTag = name ? `<name>${escapeXml(name)}</name>` : '';
+    const descTag = desc ? `<desc>${escapeXml(desc)}</desc>` : '';
     return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<gpx version="1.1" creator="Trails (https://rinociardo.github.io/trails/)"',
         '     xmlns="http://www.topografix.com/GPX/1/1"',
         '     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
         '     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">',
-        `  <metadata>${nameTag}<time>${new Date(time).toISOString()}</time></metadata>`,
-        `  <trk>${nameTag}`,
+        `  <metadata>${nameTag}${descTag}<time>${new Date(time).toISOString()}</time></metadata>`,
+        `  <trk>${nameTag}${descTag}`,
         ...segments.filter((seg) => seg.length).flatMap((seg) => ['    <trkseg>', ...seg.map(point), '    </trkseg>']),
         '  </trk>',
         '</gpx>',

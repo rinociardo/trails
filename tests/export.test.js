@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildGpx, gpxFileName } from '../gpx.js';
+import { buildGpx, gpxFileName, NO_ELEVATION_DESC } from '../gpx.js';
 import { PathRecorder, MotionTracker, trimToWindow, elevationRange } from '../tracker.js';
 
 const M = 1 / 111195; // degrees of latitude per metre
@@ -84,4 +84,19 @@ test('window: climb over the last 30 s', () => {
     assert.equal(w[0].time, 30_000);
     assert.ok(Math.abs(elevationRange(w) - 3) < 1e-9);
     assert.equal(elevationRange([{ ele: null }, { ele: 5 }]), 0);
+});
+
+test('gpx: a free recording says it has no elevations', () => {
+    const path = new PathRecorder();
+    path.startSegment();
+    for (let i = 0; i <= 20; i++) path.add({ lat: 40 + i * M, lon: 18, ele: null, time: i * 1000 });
+    assert.equal(path.hasElevations, false);
+    const text = buildGpx({ name: 'Free recording', desc: NO_ELEVATION_DESC, segments: path.snapshot() });
+    assert.doesNotMatch(text, /<ele>/);
+    assert.match(text, /<metadata><name>Free recording<\/name><desc>No elevation data/);
+    assert.match(text, /<trk><name>Free recording<\/name><desc>No elevation data/);
+
+    path.add({ lat: 40.01, lon: 18, ele: 120, time: 30_000 });
+    assert.equal(path.hasElevations, true);
+    assert.doesNotMatch(buildGpx({ segments: [[{ lat: 1, lon: 2 }]] }), /<desc>/);
 });

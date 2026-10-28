@@ -2,6 +2,7 @@
 
 A hiking Progressive Web App (PWA): open a GPX track, follow it with live GPS,
 see distance done/remaining, and get an alert when you stray from the route.
+With no track loaded, Start records a free walk that you can export as GPX.
 
 Live site (once published): https://rinociardo.github.io/trails/
 
@@ -35,7 +36,7 @@ npm test                        # unit tests: geometry, elevation, smoothing, st
 
 Developer switches (add to the address):
 
-- `?sim`: pressing Start replays the loaded track at 10× walking speed with realistic GPS noise, some bad fixes, a 45 s stop at 15% of the way and a 120 m detour at 30–38%, so you can see stop detection and the off-track alert without walking. `?sim=20` goes 20× (smoothing lag grows with speed, so very high values can cause false off-track alerts).
+- `?sim`: pressing Start replays the loaded track (with no track loaded: a 2 km square from the map centre or the last recorded point, for free recording) at 10× walking speed with realistic GPS noise, some bad fixes, a 45 s stop at 15% of the way and a 120 m detour at 30–38%, so you can see stop detection and the off-track alert without walking. `?sim=20` goes 20× (smoothing lag grows with speed, so very high values can cause false off-track alerts).
 - `?terrain=demo`: previews 3D terrain and hill shading over Innsbruck, using MapLibre's demo elevation tiles.
 
 ## Publish to GitHub Pages
@@ -75,7 +76,7 @@ The steps are in the order you should run them.
    Walk about 60 m away from the line: within a few seconds you get the banner and a beep. Come back: it clears.
    **Stop test:** stand still for a minute. *Expect:* after 30 s "Stopped 0:30", Walked stops growing, and no off-track alarm. Walk on: "Moving", and Walked grows again.
    **Debug view** (Settings › Testing): orange dots are raw GPS fixes, blue dots the smoothed position, red rings discarded fixes, and a purple dashed circle the stop area. The blue trail should be steadier than the orange, about 2 s behind you.
-   **Climb line** (debug box, needs a track with elevations, e.g. one of your GPX files): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop`. Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
+   **Climb line** (debug box, needs a track with elevations, e.g. one of your GPX files; the test loop has none, so it shows "track has no elevations"): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop`. Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
 8. **Wake Lock.** While hiking, the top bar shows **Screen awake**. Leave the phone untouched for 2 minutes.
    *Expect:* after 1 minute the screen goes black with large dim numbers (auto-dim), but the phone does **not** lock.
 9. **Background.** Press Start, switch to another app for 1 minute, come back.
@@ -85,9 +86,15 @@ The steps are in the order you should run them.
    On the iPhone, save it to Files when asked, then in Trails: Open GPX › pick it.
    *Expect:* the same name, distance, ↑ and ↓ as on the Mac, and the same profile shape. The file name looks like `Trackname_2026-10-28.gpx`.
    **Your hike:** after a walk (or the simulation in step 4), Settings › **Export my hike** › Save to Files or AirDrop to the Mac. Open it in Maps 3D PRO or another app: the line follows where you walked, with a time on every point; stops show as a time gap at one spot, and each Stop/Start makes a new segment. Its length is within a few % of "Walked" (the file keeps a point every 5 m).
-11. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
+11. **Free recording (no track).** Settings › **Remove track**. Check the top bar.
+   *Expect:* "No track — Open GPX, or Start to record"; the big numbers are **Walked / Moving / Avg speed** (not Done / Remaining / From track), and the panel shows only the Walked/Moving/Stopped/Avg row: no table, no profile.
+   **Simulated** (quick, indoors): Settings › Testing › Simulated GPS on and Debug view on, press Start. *Expect:* "Free recording (no track)", Walked and Moving grow, after about 50 s "Stopped" (the simulation pauses 45 s), never an OFF TRACK banner; the debug box says `Climb – (no track)` and `Snapped –`. Force-close and reopen: **Resume hike?** with the walked distance; Resume continues from where it was.
+   **Real** (outdoors, Simulated GPS off): press Start and walk a few hundred metres, stop for a minute, walk on, press Stop.
+   Then Settings › **Export my hike** › Save to Files. *Expect:* a file `Free-recording_2026-10-28.gpx`. Open it with Open GPX: it loads as a track with your walk's shape, and the panel says **no elevation data** (that is expected: elevations will come from a DEM, a Digital Elevation Model, later). In the Files app's preview or a text editor the file begins with `No elevation data (GPS altitude is not used)`.
+   Note: opening a GPX (or loading the sample) resets the recording, so export the free walk first.
+12. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
    *Expect:* the app opens, with your track and live position. The map background may be blank: offline map tiles are not built yet.
-12. **Update.** After a new version is published, open the app with signal.
+13. **Update.** After a new version is published, open the app with signal.
    *Expect:* a "New version installed — Reload" banner. Settings › App version shows the new number.
 
 ### If Wake Lock fails

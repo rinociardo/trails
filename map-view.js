@@ -200,6 +200,11 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
             return true;
         },
 
+        getCenter() {
+            const { lat, lng } = map.getCenter();
+            return { lat, lon: lng };
+        },
+
         setFollow(on) {
             following = on;
         },

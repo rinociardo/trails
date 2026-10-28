@@ -227,6 +227,8 @@
             text-align: center;
         }
         [hidden] { display: none !important; }
+        /* Free recording (no track loaded): track-only parts are hidden, not shown as zeros. */
+        body:not(.free-mode) .free-only, body.free-mode .track-only { display: none !important; }
 
         /* ---- Bottom toolbar ---- */
         #toolbar {
@@ -313,12 +315,15 @@
 
     <header id="stats">
         <div class="stat-row">
-            <div class="stat"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
-            <div class="stat"><span class="stat-label">Remaining</span><span class="stat-value" id="stat-remaining">–</span></div>
-            <div class="stat"><span class="stat-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
+            <div class="stat track-only"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
+            <div class="stat track-only"><span class="stat-label">Remaining</span><span class="stat-value" id="stat-remaining">–</span></div>
+            <div class="stat track-only"><span class="stat-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
+            <div class="stat free-only"><span class="stat-label">Walked</span><span class="stat-value" id="stat-walked">–</span></div>
+            <div class="stat free-only"><span class="stat-label">Moving</span><span class="stat-value" id="stat-moving">–</span></div>
+            <div class="stat free-only"><span class="stat-label">Avg speed</span><span class="stat-value" id="stat-speed">–</span></div>
         </div>
         <div class="status-row">
-            <span id="track-status">No track — tap Open GPX</span>
+            <span id="track-status">No track</span>
             <span id="gps-status">GPS off</span>
             <span id="motion-status" hidden></span>
             <button type="button" id="wake-status" hidden></button>
@@ -333,7 +338,7 @@
             <span class="chevron" aria-hidden="true">▾</span>
         </button>
         <div id="trip-body">
-            <table class="trip-table">
+            <table class="trip-table track-only">
                 <thead>
                     <tr><th></th><th>Done</th><th>Remaining</th><th>Total</th></tr>
                 </thead>
@@ -343,7 +348,7 @@
                     <tr><th>Descent</th><td id="t-desc-done">–</td><td id="t-desc-rem">–</td><td id="t-desc-total">–</td></tr>
                 </tbody>
             </table>
-            <div class="profile" id="profile" aria-label="Elevation profile">
+            <div class="profile track-only" id="profile" aria-label="Elevation profile">
                 <canvas></canvas>
                 <div class="profile-line" hidden></div>
                 <div class="profile-dot" hidden></div>
@@ -378,10 +383,13 @@
     <input type="file" id="gpx-input" hidden>
 
     <div id="dim-overlay" hidden>
-        <div><div class="dim-value" id="dim-done">–</div><div class="dim-label">Done</div></div>
-        <div><div class="dim-value" id="dim-remaining">–</div><div class="dim-label">Remaining</div></div>
-        <div><div class="dim-value" id="dim-offset">–</div><div class="dim-label">From track</div></div>
-        <div><div class="dim-value" id="dim-climb">–</div><div class="dim-label">Climb left</div></div>
+        <div class="track-only"><div class="dim-value" id="dim-done">–</div><div class="dim-label">Done</div></div>
+        <div class="track-only"><div class="dim-value" id="dim-remaining">–</div><div class="dim-label">Remaining</div></div>
+        <div class="track-only"><div class="dim-value" id="dim-offset">–</div><div class="dim-label">From track</div></div>
+        <div class="track-only"><div class="dim-value" id="dim-climb">–</div><div class="dim-label">Climb left</div></div>
+        <div class="free-only"><div class="dim-value" id="dim-walked">–</div><div class="dim-label">Walked</div></div>
+        <div class="free-only"><div class="dim-value" id="dim-moving">–</div><div class="dim-label">Moving</div></div>
+        <div class="free-only"><div class="dim-value" id="dim-speed">–</div><div class="dim-label">Avg speed</div></div>
         <div class="dim-label" id="dim-motion"></div>
         <div id="dim-hint">Tap anywhere to show the map</div>
     </div>
@@ -440,10 +448,10 @@
             <label class="field">Debug view (raw vs smoothed GPS)
                 <input type="checkbox" id="set-debug">
             </label>
-            <label class="field">Simulated GPS (replays the track)
+            <label class="field">Simulated GPS (replays the track, or a test walk)
                 <input type="checkbox" id="set-simulate">
             </label>
-            <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
+            <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. With no track loaded it walks a 2 km square from your last recorded point (or the map centre), to test free recording. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
             <div class="actions">
                 <button type="button" id="reset-trip-btn">Reset walked/time</button>
             </div>
@@ -451,18 +459,18 @@
             <h3>Track</h3>
             <div class="actions">
                 <button type="button" id="reverse-btn">Reverse direction</button>
-                <button type="button" id="test-loop-btn">Test loop here</button>
+                <button type="button" id="test-loop-btn">Test loop here (no elevations)</button>
                 <button type="button" id="sample-btn">Load sample track</button>
                 <button type="button" class="danger" id="clear-btn">Remove track</button>
             </div>
-            <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test.</p>
+            <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test. It has no elevations, so the ascent/descent figures, the profile and the debug view's Climb line stay empty with it; use one of your own GPX files for those.</p>
 
             <h3>Export (GPX)</h3>
             <div class="actions">
                 <button type="button" id="export-track-btn">Export track</button>
                 <button type="button" id="export-hike-btn">Export my hike</button>
             </div>
-            <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file.</p>
+            <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it; a free recording, made with no track loaded, has none and says so in the file). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file.</p>
 
             <h3>This device</h3>
             <dl class="info">
