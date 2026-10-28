@@ -109,7 +109,7 @@
             font: inherit; font-weight: 600; color: var(--profile-marker);
         }
         .track-info { margin-top: 4px; font-size: 11px; color: var(--panel-muted); }
-        .library-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
+        .library-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
         .library-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .credits { margin: 4px 0 0; padding-left: 18px; font-size: 11px; color: var(--panel-muted); }
 
@@ -237,6 +237,18 @@
         [hidden] { display: none !important; }
         /* Free recording (no track loaded): track-only parts are hidden, not shown as zeros. */
         body:not(.free-mode) .free-only, body.free-mode .track-only { display: none !important; }
+        /* Track planner: its own top bar and toolbar; the panel keeps only the profile. */
+        body:not(.plan-mode) .plan-only, body.plan-mode .plan-hide { display: none !important; }
+        body.plan-mode #profile { display: block !important; }
+        body.plan-mode #toolbar { grid-template-columns: repeat(4, 1fr); }
+        .plan-bar { display: flex; flex-direction: column; gap: 4px; }
+        .plan-bar input {
+            font: inherit; font-size: 17px; font-weight: 600;
+            padding: 4px 8px; border-radius: 6px; border: 1px solid var(--on-brand-muted);
+            background: rgba(255,255,255,.12); color: var(--on-brand);
+        }
+        .plan-hint { font-size: 12px; color: var(--on-brand-muted); }
+        .plan-warning { font-size: 13px; font-weight: 600; color: #ffd8a8; }
 
         /* ---- Bottom toolbar ---- */
         #toolbar {
@@ -322,7 +334,12 @@
     <div id="map"></div>
 
     <header id="stats">
-        <div class="stat-row">
+        <div class="plan-bar plan-only">
+            <input type="text" id="plan-name" aria-label="Track name" placeholder="Track name" autocomplete="off">
+            <div class="plan-hint">Tap the map to add a point · drag a point to move it · tap it to delete · drag a small circle to insert a point</div>
+            <div class="plan-warning" id="plan-warning" hidden></div>
+        </div>
+        <div class="stat-row plan-hide">
             <div class="stat track-only"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
             <div class="stat track-only"><span class="stat-label">Remaining</span><span class="stat-value" id="stat-remaining">–</span></div>
             <div class="stat track-only"><span class="stat-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
@@ -330,7 +347,7 @@
             <div class="stat free-only"><span class="stat-label">Moving</span><span class="stat-value" id="stat-moving">–</span></div>
             <div class="stat free-only"><span class="stat-label">Avg speed</span><span class="stat-value" id="stat-speed">–</span></div>
         </div>
-        <div class="status-row">
+        <div class="status-row plan-hide">
             <span id="track-status">No track</span>
             <span id="gps-status">GPS off</span>
             <span id="motion-status" hidden></span>
@@ -346,7 +363,7 @@
             <span class="chevron" aria-hidden="true">▾</span>
         </button>
         <div id="trip-body">
-            <table class="trip-table track-only">
+            <table class="trip-table track-only plan-hide">
                 <thead>
                     <tr><th></th><th>Done</th><th>Remaining</th><th>Total</th></tr>
                 </thead>
@@ -364,8 +381,8 @@
                 <div class="profile-tip" hidden></div>
                 <div class="profile-empty" hidden>No elevation data in this track</div>
             </div>
-            <div class="track-info track-only" id="track-info"></div>
-            <div class="walk-row">
+            <div class="track-info track-only plan-hide" id="track-info"></div>
+            <div class="walk-row plan-hide">
                 <span>Walked <b id="w-walked">–</b></span>
                 <span>Moving <b id="w-moving">–</b></span>
                 <span>Stopped <b id="w-stopped">–</b></span>
@@ -383,11 +400,15 @@
     <div id="toast" role="status" hidden></div>
 
     <nav id="toolbar">
-        <label class="tool" for="gpx-input">Open GPX</label>
-        <button type="button" class="tool primary" id="start-btn">Start</button>
-        <button type="button" class="tool" id="center-btn">Center</button>
-        <button type="button" class="tool" id="dim-btn">Dim</button>
-        <button type="button" class="tool" id="settings-btn">Settings</button>
+        <label class="tool plan-hide" for="gpx-input">Open GPX</label>
+        <button type="button" class="tool primary plan-hide" id="start-btn">Start</button>
+        <button type="button" class="tool plan-hide" id="center-btn">Center</button>
+        <button type="button" class="tool plan-hide" id="dim-btn">Dim</button>
+        <button type="button" class="tool plan-hide" id="settings-btn">Settings</button>
+        <button type="button" class="tool plan-only" id="plan-undo">Undo</button>
+        <button type="button" class="tool plan-only" id="plan-save">Save</button>
+        <button type="button" class="tool plan-only" id="plan-export">Export</button>
+        <button type="button" class="tool primary plan-only" id="plan-done">Done</button>
     </nav>
     <!-- No "accept" filter: iOS greys out .gpx files when one is set -->
     <input type="file" id="gpx-input" hidden>
@@ -412,9 +433,13 @@
             <label class="field">Off-track distance (metres)
                 <input type="number" id="set-offtrack" min="10" max="500" step="5" inputmode="numeric">
             </label>
+            <label class="field">…on straight (cross-country) segments (metres)
+                <input type="number" id="set-offtrack-straight" min="10" max="1000" step="10" inputmode="numeric">
+            </label>
             <label class="field">Sound with off-track alert
                 <input type="checkbox" id="set-sound">
             </label>
+            <p class="hint">Straight segments of a planned track have no path to follow, so you may stray further from the line there.</p>
 
             <h3>Battery</h3>
             <label class="field">Auto-dim while hiking
@@ -480,6 +505,15 @@
             <h3>Saved walks</h3>
             <div id="library"></div>
             <p class="hint" id="library-empty">None yet. After a recording, tap "Save as track" (in the panel, or below) to keep the walk as a track you can load and follow.</p>
+            <div class="actions">
+                <button type="button" id="new-track-btn">New track</button>
+            </div>
+            <p class="hint">"New track" plans a route on the map; "Edit" changes a saved one. Editing a recorded walk saves a new track and keeps the recording.</p>
+
+            <h3>Planning</h3>
+            <label class="field">Warn when a straight segment crosses slopes steeper than (degrees)
+                <input type="number" id="set-steep" min="10" max="60" step="1" inputmode="numeric">
+            </label>
 
             <h3>Export (GPX)</h3>
             <div class="actions">

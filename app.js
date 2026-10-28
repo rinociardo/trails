@@ -6,6 +6,7 @@ import { createMapView } from './map-view.js';
 import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
+import { createPlanner } from './planner.js';
 
 // Developer switches: ?sim (or ?sim=N for N× walking speed, default 10) replays
 // the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
@@ -23,6 +24,7 @@ const WALKED_REDRAW_MS = 5000;      // the walked line is redrawn at most this o
 const SETTINGS_KEY = 'trails.settings';
 const DEFAULT_SETTINGS = {
     offTrackM: 50,
+    offTrackStraightM: 100, // on straight (cross-country) segments of a planned track
     sound: true,
     autoDimS: 60,
     maxAccuracyM: DEFAULT_TRACKING.maxAccuracyM,
@@ -31,6 +33,7 @@ const DEFAULT_SETTINGS = {
     stopTimeS: DEFAULT_TRACKING.stopTimeS,
     stopClimbM: DEFAULT_TRACKING.stopClimbM,
     eleThresholdM: DEFAULT_ELEVATION_THRESHOLD_M,
+    steepSlopeDeg: 30,      // planner: warn when a straight segment crosses steeper terrain
     debug: false,
     simulate: false,
     panelOpen: true,
@@ -173,6 +176,23 @@ view.on('webglcontextlost', () => {
 
 const chart = createProfileChart($('profile'));
 
+const planner = createPlanner({
+    view,
+    chart,
+    settings,
+    saveEntry: saveLibraryEntry,
+    exportGpx,
+    toast,
+    formatDistance,
+    formatMetres,
+    formatDateTime,
+    // Back to the loaded track's profile and numbers.
+    onExit() {
+        chart.setData(track, track?.profile ?? null);
+        renderTrip();
+    },
+});
+
 // ---------- State ----------
 
 // { name, points, cum, total, profile, eleInfo, temporary }: profile is null without
@@ -239,6 +259,7 @@ function renderStats() {
 // Done / remaining / total table and the profile marker. Totals show as soon
 // as a track is loaded, so trails can be compared before starting.
 function renderTrip() {
+    if (planner.active) return; // the planner shows its own totals and profile
     const prof = track?.profile;
     const along = hike.progress?.along ?? 0;
     const started = Boolean(track && hike.progress);
@@ -630,8 +651,7 @@ function resetOffTrack() {
     hike.offTrack = false;
 }
 
-function updateOffTrack(offset) {
-    const limit = settings.offTrackM;
+function updateOffTrack(offset, limit) {
     if (offset > limit) {
         hike.farCount++;
     } else {
@@ -825,7 +845,9 @@ function onFix(position) {
     if (loc && !stopped) {
         hike.prevAlong = loc.along;
         hike.progress = { along: loc.along, offset: loc.offset };
-        updateOffTrack(loc.offset);
+        // Straight (cross-country) segments of a planned track allow more room.
+        const straight = track.points[loc.index]?.straight;
+        updateOffTrack(loc.offset, straight ? settings.offTrackStraightM : settings.offTrackM);
     }
     const shown = stopped ? motion.anchor : smoothed;
     hike.lastFix = { lat: shown.lat, lon: shown.lon, acc: raw.acc };
@@ -1028,6 +1050,8 @@ async function fillDeviceInfo() {
 
 $('settings-btn').addEventListener('click', () => {
     $('set-offtrack').value = settings.offTrackM;
+    $('set-offtrack-straight').value = settings.offTrackStraightM;
+    $('set-steep').value = settings.steepSlopeDeg;
     $('set-sound').checked = settings.sound;
     $('set-autodim').value = String(settings.autoDimS);
     $('set-maxacc').value = settings.maxAccuracyM;
@@ -1067,6 +1091,8 @@ bindNumberSetting('set-window', 'smoothWindow', applyTracking);
 bindNumberSetting('set-stopradius', 'stopRadiusM', applyTracking);
 bindNumberSetting('set-stoptime', 'stopTimeS', applyTracking);
 bindNumberSetting('set-stopclimb', 'stopClimbM', applyTracking);
+bindNumberSetting('set-offtrack-straight', 'offTrackStraightM');
+bindNumberSetting('set-steep', 'steepSlopeDeg', () => planner.refresh());
 bindNumberSetting('set-elethreshold', 'eleThresholdM', () => {
     if (!track) return;
     track.profile = buildProfile(track, settings.eleThresholdM);
@@ -1245,6 +1271,24 @@ function walkedPoints() {
 
 const loadLibrary = async () => (await kvGet('library')) || [];
 
+// Adds an entry to Saved walks, or replaces the one with the same id (an edited track).
+async function saveLibraryEntry(entry) {
+    const entries = await loadLibrary();
+    const i = entries.findIndex((e) => e.id === entry.id);
+    if (i >= 0) entries[i] = entry;
+    else entries.push(entry);
+    await kvSet('library', entries);
+    requestPersistence();
+}
+
+function openPlanner(entry = null) {
+    if (hike.running) return toast('Stop the hike first.');
+    $('settings').close();
+    planner.open(entry);
+}
+
+$('new-track-btn').addEventListener('click', () => openPlanner());
+
 // Saves the walk to Settings › Saved walks, with elevations: the planned
 // track's where the walk followed it, the DEM's for the rest.
 async function saveWalkAsTrack() {
@@ -1273,8 +1317,7 @@ async function saveWalkAsTrack() {
         savedAt: Date.now(),
     };
     try {
-        await kvSet('library', [...await loadLibrary(), entry]);
-        requestPersistence();
+        await saveLibraryEntry(entry);
     } catch (err) {
         console.error('Saving walk failed:', err);
         toast('Could not save the walk on this device.', 5000);
@@ -1311,13 +1354,15 @@ async function renderLibrary() {
             $('settings').close();
             toast(`Loaded ${formatDistance(track.total)} track.`);
         });
+        const edit = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit' });
+        edit.addEventListener('click', () => openPlanner(entry));
         const del = Object.assign(document.createElement('button'), { type: 'button', className: 'danger', textContent: 'Delete' });
         del.addEventListener('click', async () => {
             if (!confirm(`Delete “${entry.name}” from this device?`)) return;
             await kvSet('library', (await loadLibrary()).filter((e) => e.id !== entry.id));
             renderLibrary();
         });
-        row.append(label, load, del);
+        row.append(label, load, edit, del);
         return row;
     }));
     $('library-empty').hidden = entries.length > 0;

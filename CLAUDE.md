@@ -223,10 +223,67 @@ wanted eventually.
 - With no track: the map opens where the last recording ended, else on the **current
   position** (one location request, cached up to 5 min, no dot drawn until Start).
 
+### Stage 2 Plan, step 1: simple planner (done in v0.7.0, requested 2026-10-28)
+- Mainly for the Mac (mouse), also iPhone/iPad (touch). Settings › Saved walks › **New
+  track** opens the planner; **Edit** on a saved entry edits it. Not available while a hike
+  is running.
+- Tap/click the map to add a point at the end, joined by a straight line. Drag a point to
+  move it; tap it to delete it (an inner point's two segments become one). Each segment has a
+  small middle handle: drag it to insert a point. **Undo** button (also Cmd/Ctrl+Z on the
+  Mac; up to 200 steps, a drag is one step). Double-tap zoom is off while planning.
+  Hit area around points: 10 px with a mouse, 22 px with a finger.
+- Live totals in the panel header (distance, ↑, ↓, number of points) and the elevation
+  profile, from the **DEM**: the line is sampled every **25 m** (plus every point) and the
+  elevations fetched (tiles cached in memory, 48 at most), 250 ms after the last change.
+- Name field in the planner's top bar (default `Track YYYY-MM-DD HH:MM`). **Save** stores it
+  in Saved walks (edit = replace the same entry). **Export** writes a GPX 1.1 of the sampled
+  line with elevations (the segment types are not in the GPX). **Done** leaves (asks if
+  unsaved).
+- Saved entry: `points` (the sampled line with `ele` and `straight` per point, what a hike
+  follows) plus `plan: { vertices, segments }` (what the planner edits).
+- Editing a **recorded walk** simplifies it (Douglas-Peucker, 3 m) into draggable points on
+  "trail" segments (they followed real paths) and saves a **new** entry `Name (edited)`, so
+  the recording is kept.
+
+### Cross-country (straight) segments (requested 2026-10-28)
+- Every segment is either **"trail"** (follow trails) or **"straight"** (a straight line);
+  stored per segment. Straight segments are drawn **dashed**, trail segments solid.
+- Step 1 (done in v0.7.0): no routing, so every segment drawn in the planner is straight;
+  switching a segment's type comes with step 2. Edited recorded walks are "trail".
+- Step 2 (with routing, to build): switch a segment either way; if the router finds no path,
+  or its path is **more than 3×** the straight distance, fall back to a straight segment and
+  say so.
+- **Steep-slope warning** (done in v0.7.0): straight segments are checked against the
+  terrain slope from the DEM (central differences, 15 m each way, at every 25 m sample). Above
+  the setting (Settings › Planning, default **30°**) the segment turns orange and the top bar
+  says e.g. "⚠ Straight segment 1 crosses slopes up to 48°". It is terrain slope, not the
+  line's own gradient: a line along a steep hillside also warns. Checked at Lauterbrunnen:
+  a line across the valley warns (48°), none at a 60° limit.
+- **Hike tolerance** (done in v0.7.0): on straight segments the off-track limit is Settings ›
+  Alerts › "…on straight (cross-country) segments", default **100 m** (normal limit 50 m).
+  Tested by simulation: 91 m from a straight line with limits 50/200 m raised no alert.
+
+### Stage 2 Plan, step 2: snap to trails (proposal, waiting for the user's choice)
+Proposal of 2026-10-28 (all four allow calls from a browser, CORS checked):
+- **openrouteservice** (HeiGIT): free key, 2,000 routes/day, 40/min; `foot-hiking` profile.
+  access=private/no paths excluded unless foot is allowed. Key would be visible in a public
+  page, so let the user enter their own key in Settings. Recommended.
+- **BRouter** (brouter.de): free, no key, best hiking profiles (`hiking-mountain` with SAC
+  limit), returns elevation. No published terms or limits for the public server (a
+  community service; ask before app use, or self-host). access=private/no: near-prohibitive
+  penalty, but only a small one if the way is part of a marked hiking route.
+- **GraphHopper**: free plan 500 credits/day, non-commercial, 5 points per request; blocks
+  access=private by default; `hike` profile allows some ways `foot` avoids.
+- **Valhalla on FOSSGIS servers**: free, no key, max 1 request/s, no guarantee, and FOSSGIS
+  asks apps not to hard-code the address: fine for trying, not as the app's backend.
+  Pedestrian handling of access=private not documented (to verify).
+Routing would be per "trail" segment (between its two points), so editing costs one request
+per changed segment.
+
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
   (needs the offline map source decision; must respect provider terms and storage limits).
-- Stage 2 Plan: create a route on the map (GPX export of it already works via Export track).
+- Stage 2 Plan, step 2: snap to trails (routing service to choose, see above).
 - Stage 1 Scout: improvements (search, locate me, topographic layer, trail overlay).
 - 3D terrain and hill shading (hook exists in `map-config.js`: `TERRAIN`).
 
@@ -248,8 +305,8 @@ wanted eventually.
 - Run locally: `python3 -m http.server 8000`; tests: `npm test`.
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
-  side of the DEM (fetch + decode PNG tiles).
+  side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen.
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
   distance walked in that time is missing from the recording.

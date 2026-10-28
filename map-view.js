@@ -11,6 +11,13 @@ const EMPTY = { type: 'FeatureCollection', features: [] };
 // the screen, so the map is not redrawn on every GPS fix (saves battery).
 const FOLLOW_MARGIN = 0.25;
 
+// Track planner: colours, and how far from a point a tap or click still hits it.
+const PLAN_COLOR = '#7048e8';
+const PLAN_STEEP_COLOR = '#f76707';
+const HIT_RADIUS_MOUSE = 10;
+const HIT_RADIUS_TOUCH = 22;
+const DRAG_START_PX = 4;
+
 function buildStyle(basemap) {
     return {
         version: 8,
@@ -18,6 +25,7 @@ function buildStyle(basemap) {
             basemap: basemap.source,
             track: { type: 'geojson', data: EMPTY },
             walked: { type: 'geojson', data: EMPTY },
+            plan: { type: 'geojson', data: EMPTY },
             accuracy: { type: 'geojson', data: EMPTY },
             debug: { type: 'geojson', data: EMPTY },
         },
@@ -61,6 +69,52 @@ function buildStyle(basemap) {
                     'circle-stroke-width': 2,
                 },
             },
+            // Track planner: straight (cross-country) segments dashed, trail segments
+            // solid, steep straight ones orange; points to drag, and a smaller handle
+            // in the middle of each segment for inserting a point.
+            {
+                id: 'plan-casing', type: 'line', source: 'plan',
+                filter: ['==', ['get', 'kind'], 'segment'],
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#ffffff', 'line-width': 7, 'line-opacity': 0.8 },
+            },
+            {
+                id: 'plan-trail', type: 'line', source: 'plan',
+                filter: ['all', ['==', ['get', 'kind'], 'segment'], ['==', ['get', 'type'], 'trail']],
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': ['case', ['get', 'steep'], PLAN_STEEP_COLOR, PLAN_COLOR], 'line-width': 4 },
+            },
+            {
+                id: 'plan-straight', type: 'line', source: 'plan',
+                filter: ['all', ['==', ['get', 'kind'], 'segment'], ['==', ['get', 'type'], 'straight']],
+                layout: { 'line-join': 'round' },
+                paint: {
+                    'line-color': ['case', ['get', 'steep'], PLAN_STEEP_COLOR, PLAN_COLOR],
+                    'line-width': 4,
+                    'line-dasharray': [2, 1.5],
+                },
+            },
+            {
+                id: 'plan-mids', type: 'circle', source: 'plan',
+                filter: ['==', ['get', 'kind'], 'mid'],
+                paint: {
+                    'circle-radius': 5,
+                    'circle-color': '#ffffff',
+                    'circle-opacity': 0.85,
+                    'circle-stroke-color': PLAN_COLOR,
+                    'circle-stroke-width': 1.5,
+                },
+            },
+            {
+                id: 'plan-vertices', type: 'circle', source: 'plan',
+                filter: ['==', ['get', 'kind'], 'vertex'],
+                paint: {
+                    'circle-radius': 7,
+                    'circle-color': ['match', ['get', 'role'], 'start', '#2e7d32', 'end', '#c62828', '#ffffff'],
+                    'circle-stroke-color': PLAN_COLOR,
+                    'circle-stroke-width': 3,
+                },
+            },
             // Debug view: stop circle, raw fixes (orange), discarded fixes (red ring),
             // smoothed positions (blue).
             {
@@ -96,6 +150,30 @@ function enableTerrain(map, terrain) {
     }
     map.setTerrain({ source: 'terrain-dem', exaggeration: terrain.exaggeration ?? 1 });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+}
+
+// plan: { vertices: [{lat, lon}], segments: ['straight'|'trail'], steep: Set of segment indexes }
+function planGeoJson({ vertices, segments, steep }) {
+    const features = [];
+    const coord = (v) => [v.lon, v.lat];
+    segments.forEach((type, i) => {
+        const a = vertices[i], b = vertices[i + 1];
+        features.push({
+            type: 'Feature',
+            properties: { kind: 'segment', type, steep: steep.has(i), index: i },
+            geometry: { type: 'LineString', coordinates: [coord(a), coord(b)] },
+        });
+        features.push({
+            type: 'Feature',
+            properties: { kind: 'mid', index: i },
+            geometry: { type: 'Point', coordinates: [(a.lon + b.lon) / 2, (a.lat + b.lat) / 2] },
+        });
+    });
+    vertices.forEach((v, i) => {
+        const role = i === 0 ? 'start' : i === vertices.length - 1 ? 'end' : 'middle';
+        features.push({ type: 'Feature', properties: { kind: 'vertex', index: i, role }, geometry: { type: 'Point', coordinates: coord(v) } });
+    });
+    return { type: 'FeatureCollection', features };
 }
 
 function trackGeoJson(points) {
@@ -155,6 +233,77 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
     // dragstart only fires for user gestures, not for our own camera moves.
     map.on('dragstart', () => { following = false; });
 
+    // ---- Track planner editing: mouse and touch ----
+    // handlers: { add(p), tapVertex(i), dragVertex(i, p, phase), dragMid(s, p, phase) }
+    // with phase 'start' | 'move' | 'end'. Tapping a segment's middle handle does nothing (yet).
+    let planHandlers = null;
+    let drag = null;          // { kind, index, start: {x, y}, moved, touch }
+    let suppressClickUntil = 0;
+
+    const toPoint = (lngLat) => ({ lat: lngLat.lat, lon: lngLat.lng });
+
+    // The plan point or middle handle under the pointer (points win), or null.
+    function hitPlan(point, radius) {
+        const box = [[point.x - radius, point.y - radius], [point.x + radius, point.y + radius]];
+        const features = map.queryRenderedFeatures(box, { layers: ['plan-vertices', 'plan-mids'] });
+        let best = null, bestD = Infinity;
+        for (const f of features) {
+            const p = map.project(f.geometry.coordinates);
+            const d = Math.hypot(p.x - point.x, p.y - point.y) - (f.properties.kind === 'vertex' ? radius : 0);
+            if (d < bestD) { bestD = d; best = { kind: f.properties.kind, index: f.properties.index }; }
+        }
+        return best;
+    }
+
+    function onDown(e) {
+        if (!planHandlers) return;
+        const touch = e.type === 'touchstart';
+        if (touch && e.points.length !== 1) return; // pinch zoom stays a map gesture
+        const hit = hitPlan(e.point, touch ? HIT_RADIUS_TOUCH : HIT_RADIUS_MOUSE);
+        if (!hit) return;
+        e.preventDefault(); // the map must not pan while a point is dragged
+        drag = { ...hit, start: e.point, moved: false, touch };
+        map.on(touch ? 'touchmove' : 'mousemove', onMove);
+        map.once(touch ? 'touchend' : 'mouseup', onUp);
+    }
+
+    function onMove(e) {
+        if (!drag) return;
+        if (!drag.moved) {
+            if (Math.hypot(e.point.x - drag.start.x, e.point.y - drag.start.y) < DRAG_START_PX) return;
+            drag.moved = true;
+            dragCallback('start', e.lngLat);
+        }
+        e.preventDefault();
+        dragCallback('move', e.lngLat);
+    }
+
+    function dragCallback(phase, lngLat) {
+        if (drag.kind === 'vertex') planHandlers.dragVertex(drag.index, toPoint(lngLat), phase);
+        else planHandlers.dragMid(drag.index, toPoint(lngLat), phase);
+    }
+
+    function onUp(e) {
+        map.off(drag.touch ? 'touchmove' : 'mousemove', onMove);
+        if (drag.moved) dragCallback('end', e.lngLat);
+        else if (drag.kind === 'vertex') planHandlers.tapVertex(drag.index);
+        drag = null;
+        suppressClickUntil = Date.now() + 400; // the click that follows is not "add a point"
+    }
+
+    map.on('mousedown', onDown);
+    map.on('touchstart', onDown);
+    map.on('click', (e) => {
+        if (!planHandlers || Date.now() < suppressClickUntil) return;
+        if (hitPlan(e.point, HIT_RADIUS_MOUSE)) return;
+        planHandlers.add(toPoint(e.lngLat));
+    });
+    // Pointer cursor over draggable points on the Mac.
+    map.on('mousemove', (e) => {
+        if (!planHandlers || drag) return;
+        map.getCanvas().style.cursor = hitPlan(e.point, HIT_RADIUS_MOUSE) ? 'pointer' : 'crosshair';
+    });
+
     function keepInView(fix) {
         const pt = map.project([fix.lon, fix.lat]);
         const { clientWidth: w, clientHeight: h } = map.getContainer();
@@ -181,6 +330,26 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
                 ? { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } }
                 : EMPTY;
             ready.then(() => map.getSource('walked').setData(data));
+        },
+
+        // Track planner: start/stop editing (handlers: see hitPlan above) and draw the plan.
+        startPlanEditing(handlers) {
+            planHandlers = handlers;
+            following = false;
+            map.doubleClickZoom.disable(); // a quick second tap adds a point instead
+            map.getCanvas().style.cursor = 'crosshair';
+        },
+
+        stopPlanEditing() {
+            planHandlers = null;
+            drag = null;
+            map.doubleClickZoom.enable();
+            map.getCanvas().style.cursor = '';
+            ready.then(() => map.getSource('plan').setData(EMPTY));
+        },
+
+        setPlan(plan) {
+            ready.then(() => map.getSource('plan').setData(planGeoJson(plan)));
         },
 
         jumpTo({ lat, lon }, zoom = 15) {

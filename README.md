@@ -17,7 +17,9 @@ Live site (once published): https://rinociardo.github.io/trails/
 | `gpx.js` | Reads GPX files and writes them for export (unit-tested) |
 | `elevation.js` | Ascent/descent (5 m threshold) and elevation at any point of the track (unit-tested) |
 | `dem.js` | Elevations from DEM tiles: tile maths, terrarium decoding, interpolation (unit-tested) |
-| `dem-tiles.js` | Downloads and decodes the DEM tiles in the browser |
+| `dem-tiles.js` | Downloads and decodes the DEM tiles in the browser (keeps the last 48 in memory) |
+| `plan.js` | Track planning: points, segments, undo, sampling, slope, simplifying (unit-tested) |
+| `planner.js` | The planner screen: map editing, live totals, steep warning, save/export |
 | `tracker.js` | GPS smoothing, moving/stopped detection, walked distance and times, the walked path for export (unit-tested) |
 | `profile-chart.js` | The elevation profile chart in the trip panel |
 | `map-view.js` | Everything MapLibre: track, position dot, follow mode, 3D terrain hook |
@@ -103,9 +105,20 @@ The steps are in the order you should run them.
 14. **Elevations from the DEM.** With signal, open one of your GPX files that has no elevations (or the exported free walk from step 11).
    *Expect:* for a second the panel says "getting … points from the DEM", then `Elevation: N of N points · N from the DEM (Terrain Tiles)` and ↑/↓ totals. A GPX with its own elevations says `Elevation: all N points from the file`. Compare with Maps 3D PRO on a familiar route: within a few % (summits come out a little low on the DEM's 30 m grid).
    **Offline:** Airplane Mode, open such a file. *Expect:* "DEM not reachable (offline?)"; turn Airplane Mode off and the elevations fill in by themselves (or Settings › Track › Fill elevations).
-15. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
+15. **Plan a track on the Mac.** Open https://rinociardo.github.io/trails/ in Safari. Settings › Saved walks › **New track**.
+   *Expect:* a top bar with the name field and a hint, the toolbar shows Undo / Save / Export / Done, and the pointer is a crosshair over the map.
+   Click 4–5 places along a valley you know. *Expect:* dashed purple lines between green (start) and red (end) points, and in the panel `2.35 km · ↑ 320 m · ↓ 120 m · 5 points` with a profile (it updates a moment after each click).
+   **Move:** drag a point (the pointer becomes a hand over it): the line and totals follow. **Delete:** click a point. **Insert:** drag one of the small circles in the middle of a segment. **Undo** (or Cmd+Z) reverses each step; a drag is one step.
+   **Steep:** add a point so a straight line crosses a steep slope (a valley side, a cliff). *Expect:* that segment turns orange and the top bar says "⚠ Straight segment N crosses slopes up to 4x°". Settings › Planning sets the limit (default 30°).
+   Type a name, **Save**: "Saved … in Settings › Saved walks". **Export**: the Share sheet (or a download) with `Name_2026-10-28.gpx`; Maps 3D PRO should show the same line and similar ↑/↓. **Done** leaves the planner.
+   Settings › Saved walks › **Edit** on it: the same points come back; change one, Save, and Load it: the new version.
+   **Edit a recorded walk:** Edit on a saved walk shows its path as many points on solid lines (trail segments); Save makes a new entry `… (edited)` and keeps the walk.
+16. **Plan on the iPhone/iPad.** Same as step 15 with a finger: tap to add, press and drag a point, tap a point to delete, drag a middle circle to insert. Pinching zooms the map without moving points. Note anything fiddly (points too small, a tap taken as a drag).
+17. **Follow a planned track.** Load the planned track from Saved walks and go out (or simulate with Settings › Testing › Simulated GPS).
+   *Expect:* the normal hike screen. On straight (dashed) segments the off-track alert waits until you are more than Settings › Alerts › "…on straight segments" away (default 100 m instead of 50 m).
+18. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
    *Expect:* the app opens, with your track and live position. The map background may be blank: offline map tiles are not built yet.
-16. **Update.** After a new version is published, open the app with signal.
+19. **Update.** After a new version is published, open the app with signal.
    *Expect:* a "New version installed — Reload" banner. Settings › App version shows the new number.
 
 ### If Wake Lock fails
@@ -135,3 +148,5 @@ Ascent/descent are counted with a **5 m threshold**: a climb or drop only counts
 | Stopped when within | 15 m | short stops are missed | slow climbs are marked "Stopped" |
 | …for at least | 30 s | brief pauses count as stops | you want stops recognised sooner |
 | …unless the track climbed more than | 3 m (= 360 m/h) | standing on a steep slope isn't detected as a stop | slow steep climbs still show "Stopped" |
+| Off-track distance on straight segments | 100 m | cross-country parts alert too often | you want to stay closer to the line |
+| Steep-slope warning (planner) | 30° | the warning shows on slopes you find fine | it misses slopes you'd avoid |
