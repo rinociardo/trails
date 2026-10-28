@@ -12,9 +12,9 @@ Live site (once published): https://rinociardo.github.io/trails/
 | `index.html` | Page layout, styles, Apple Home Screen tags |
 | `app.js` | Hike logic: GPX import, GPS, progress, off-track alerts, Wake Lock, dim mode, settings, updates |
 | `geo.js` | Distance maths and "where am I on the track" (unit-tested in `tests/`) |
-| `gpx.js` | Reads GPX files |
+| `gpx.js` | Reads GPX files and writes them for export (unit-tested) |
 | `elevation.js` | Ascent/descent (5 m threshold) and elevation at any point of the track (unit-tested) |
-| `tracker.js` | GPS smoothing and moving/stopped detection, walked distance and times (unit-tested) |
+| `tracker.js` | GPS smoothing, moving/stopped detection, walked distance and times, the walked path for export (unit-tested) |
 | `profile-chart.js` | The elevation profile chart in the trip panel |
 | `map-view.js` | Everything MapLibre: track, position dot, follow mode, 3D terrain hook |
 | `map-config.js` | Map sources: basemap tiles and (later) elevation for 3D/hill shading |
@@ -75,18 +75,24 @@ The steps are in the order you should run them.
    Walk about 60 m away from the line: within a few seconds you get the banner and a beep. Come back: it clears.
    **Stop test:** stand still for a minute. *Expect:* after 30 s "Stopped 0:30", Walked stops growing, and no off-track alarm. Walk on: "Moving", and Walked grows again.
    **Debug view** (Settings › Testing): orange dots are raw GPS fixes, blue dots the smoothed position, red rings discarded fixes, and a purple dashed circle the stop area. The blue trail should be steadier than the orange, about 2 s behind you.
+   **Climb line** (debug box, needs a track with elevations, e.g. one of your GPX files): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop`. Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
 8. **Wake Lock.** While hiking, the top bar shows **Screen awake**. Leave the phone untouched for 2 minutes.
    *Expect:* after 1 minute the screen goes black with large dim numbers (auto-dim), but the phone does **not** lock.
 9. **Background.** Press Start, switch to another app for 1 minute, come back.
    *Expect:* "Screen awake" again, and GPS updates resume (the status may briefly say "no fix for N s"). GPS does **not** run while the app is in the background: this is an iOS limit.
-10. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
+10. **GPX export and AirDrop** (Mac → iPhone).
+   On the Mac, open https://rinociardo.github.io/trails/ in Safari, open one of your GPX files, and note the totals in the panel (distance, ↑, ↓). Settings › Export (GPX) › **Export track**: the Share sheet opens; choose **AirDrop** › your iPhone. (In Chrome or Firefox on the Mac the file downloads instead; AirDrop it from Finder.)
+   On the iPhone, save it to Files when asked, then in Trails: Open GPX › pick it.
+   *Expect:* the same name, distance, ↑ and ↓ as on the Mac, and the same profile shape. The file name looks like `Trackname_2026-10-28.gpx`.
+   **Your hike:** after a walk (or the simulation in step 4), Settings › **Export my hike** › Save to Files or AirDrop to the Mac. Open it in Maps 3D PRO or another app: the line follows where you walked, with a time on every point; stops show as a time gap at one spot, and each Stop/Start makes a new segment. Its length is within a few % of "Walked" (the file keeps a point every 5 m).
+11. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
    *Expect:* the app opens, with your track and live position. The map background may be blank: offline map tiles are not built yet.
-11. **Update.** After a new version is published, open the app with signal.
+12. **Update.** After a new version is published, open the app with signal.
    *Expect:* a "New version installed — Reload" banner. Settings › App version shows the new number.
 
 ### If Wake Lock fails
 
-The top bar says **Screen may lock — tap to retry**, or the phone locks during step 6:
+The top bar says **Screen may lock — tap to retry**, or the phone locks during step 8:
 
 - Tap that message once (some iOS versions only grant Wake Lock right after a tap).
 - Check Settings › This device › Screen wake lock. "Not supported" means your iOS is too old: update iOS (Wake Lock in Home Screen apps was reportedly unreliable before iOS 18.4).

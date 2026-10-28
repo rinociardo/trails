@@ -1,6 +1,6 @@
 // Offline support for the app itself (not map tiles).
 // Bump VERSION on every release: it names the cache and is shown in Settings.
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 const CACHE_PREFIX = 'trails-';
 const CACHE = `${CACHE_PREFIX}${VERSION}`;
 

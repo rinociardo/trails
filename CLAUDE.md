@@ -119,14 +119,43 @@ wanted eventually.
   smoothed positions (blue) and the stop circle (purple, dashed); a text box shows the
   state, accuracies, fixes used/discarded, raw-to-smoothed distance, stop check, snapped
   progress and walked distance.
+- **Climb line** (v0.4.0, requested 2026-10-28): the box also shows the track-elevation
+  change (max − min, plus net change and m/h) over the current stop-time window, both while
+  moving and while stopped, so the "unless the track climbed more than" setting can be chosen
+  from real walks (slow climb vs standing on a slope). While stopped the position is snapped
+  for this figure only. Standing still is not 0: jitter moves the snapped point along a slope
+  (≈1 m in the simulation).
 - `?sim` simulation includes GPS noise, bad fixes, a 45 s stop and a detour
   (`?sim=N` sets N× walking speed, default 10). Also switchable in Settings › Testing ›
   Simulated GPS, because the Home Screen app always opens the plain address.
 
+### GPX export (done in v0.4.0, requested 2026-10-28)
+- Purpose: move tracks between devices without a server (plan on the Mac, hike with the
+  iPhone).
+- **Export track**: the loaded/planned track as GPX 1.1, keeping elevations (Settings ›
+  Export (GPX)).
+- **Export my hike**: the path actually walked, with a timestamp on every point. One
+  `<trkseg>` per Start..Stop. A point is kept every 5 m (≈2000 points for 10 km). Stops
+  mirror the walked-distance logic: the jitter is replaced by the stop centre, written at
+  the stop's start and end times (the time gap is the stop). Elevation per point = the
+  planned track's elevation at the snapped position, only while within the off-track
+  limit (never GPS altitude); otherwise no `<ele>`. The path is saved with the recording
+  (survives a force-close) and cleared by "Reset walked/time" or loading a new track.
+- Delivery: **Web Share API with the file** where `navigator.canShare({files})` allows it
+  (iPhone and Mac Safari: Share sheet with Save to Files, AirDrop, Messages); otherwise a
+  normal download. Cancelling the sheet does nothing; any other share error falls back to
+  a download.
+- File names: `Trackname_YYYY-MM-DD.gpx` (local date; hike: `Trackname-walked_<hike date>`).
+  Letters of any language are kept; other characters become `-`.
+- Test: export on the Mac, AirDrop to the iPhone, import; totals and profile must match
+  (README step 10). Verified in a headless browser: re-imported track gives identical
+  totals.
+- `.gitignore` still blocks all personal `*.gpx` files.
+
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
   (needs the offline map source decision; must respect provider terms and storage limits).
-- Stage 2 Plan: create a route on the map; GPX export.
+- Stage 2 Plan: create a route on the map (GPX export of it already works via Export track).
 - Stage 1 Scout: improvements (search, locate me, topographic layer, trail overlay).
 - 3D terrain and hill shading (hook exists in `map-config.js`: `TERRAIN`).
 
@@ -148,7 +177,7 @@ wanted eventually.
 - Run locally: `python3 -m http.server 8000`; tests: `npm test`.
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js` and is unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node.
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
   distance walked in that time is missing from the recording.

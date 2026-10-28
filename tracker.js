@@ -51,6 +51,22 @@ export class PositionSmoother {
     }
 }
 
+// Elevation change (max - min) over samples { ele }; 0 when fewer than two are known.
+export function elevationRange(samples) {
+    const eles = samples.map((p) => p.ele).filter(Number.isFinite);
+    return eles.length > 1 ? Math.max(...eles) - Math.min(...eles) : 0;
+}
+
+// Keeps the samples { time } of the last windowMs, plus the one just before the
+// window start (where we were when it began), as the stop check does. Sorted by time.
+export function trimToWindow(samples, now, windowMs) {
+    let first = 0;
+    for (let i = samples.length - 1; i >= 0; i--) {
+        if (samples[i].time <= now - windowMs) { first = i; break; }
+    }
+    return samples.slice(first);
+}
+
 // Records distance actually walked, with moving and stopped time.
 // MOVING -> STOPPED when all positions of the last stopTimeS seconds lie within
 // max(stopRadiusM, accuracy) of each other; the distance and moving time
@@ -190,8 +206,7 @@ export class MotionTracker {
 
     // Track elevation change (max - min) over the watched positions; 0 when unknown.
     climb() {
-        const eles = this.history.map((p) => p.ele).filter(Number.isFinite);
-        return eles.length > 1 ? Math.max(...eles) - Math.min(...eles) : 0;
+        return elevationRange(this.history);
     }
 
     // What must survive the app being closed: distance and clocks.
@@ -205,5 +220,71 @@ export class MotionTracker {
         this.walked = walked;
         this.movingMs = movingMs;
         this.stoppedMs = stoppedMs;
+    }
+}
+
+// The path actually walked, for GPX export: points { lat, lon, ele, time }, one
+// segment per Start..Stop. A point is kept every minDistanceM, so a 10 km hike
+// is about 2000 points. Stops mirror MotionTracker: the jitter recorded while
+// standing is replaced by the stop's centre, at the time the stop began and
+// again when walking resumed (the gap in the timestamps is the stop).
+export class PathRecorder {
+    constructor({ minDistanceM = 5 } = {}) {
+        this.minDistanceM = minDistanceM;
+        this.segments = [];
+    }
+
+    reset() {
+        this.segments = [];
+    }
+
+    // Start (or Resume): a new segment, unless the last one is still empty.
+    startSegment() {
+        if (!this.segments.length || this.current().length) this.segments.push([]);
+    }
+
+    current() {
+        return this.segments[this.segments.length - 1];
+    }
+
+    add(p, { force = false } = {}) {
+        if (!this.segments.length) this.segments.push([]);
+        const seg = this.current();
+        const last = seg[seg.length - 1];
+        if (!force && last && haversine(last, p) < this.minDistanceM) return;
+        seg.push({ lat: p.lat, lon: p.lon, ele: Number.isFinite(p.ele) ? p.ele : null, time: p.time });
+    }
+
+    // Called when MotionTracker reports 'stopped' (centre, since = stoppedSince).
+    stop(centre, since) {
+        const seg = this.segments.length ? this.current() : null;
+        if (!seg) return;
+        const ele = seg.map((p) => p.ele).filter(Number.isFinite).pop() ?? null;
+        while (seg.length > 1 && seg[seg.length - 1].time > since) seg.pop();
+        this.add({ ...centre, ele, time: since }, { force: true });
+    }
+
+    // Called when MotionTracker reports 'resumed': we stood at the centre until now.
+    // Pass the centre read before update(), which clears it.
+    resume(centre, now) {
+        const seg = this.segments.length ? this.current() : null;
+        const ele = seg?.[seg.length - 1]?.ele ?? null;
+        this.add({ ...centre, ele, time: now }, { force: true });
+    }
+
+    get pointCount() {
+        return this.segments.reduce((n, seg) => n + seg.length, 0);
+    }
+
+    get startTime() {
+        return this.segments.find((seg) => seg.length)?.[0].time ?? null;
+    }
+
+    snapshot() {
+        return this.segments;
+    }
+
+    restore(segments) {
+        this.segments = Array.isArray(segments) ? segments : [];
     }
 }

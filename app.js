@@ -1,7 +1,7 @@
 import { buildTrack, locateOnTrack, pointAtDistance, haversine } from './geo.js';
-import { parseGpx } from './gpx.js';
+import { parseGpx, buildGpx, gpxFileName } from './gpx.js';
 import { buildProfile, profileAt, DEFAULT_ELEVATION_THRESHOLD_M } from './elevation.js';
-import { PositionSmoother, MotionTracker, DEFAULT_TRACKING } from './tracker.js';
+import { PositionSmoother, MotionTracker, PathRecorder, DEFAULT_TRACKING, trimToWindow, elevationRange } from './tracker.js';
 import { createMapView } from './map-view.js';
 import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
@@ -165,6 +165,7 @@ let track = null; // { name, points, cum, total, profile } (profile null without
 
 const smoother = new PositionSmoother({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
 const motion = new MotionTracker({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS, stopClimbM: settings.stopClimbM });
+const path = new PathRecorder(); // the hike as walked, for GPX export
 
 const hike = {
     running: false,
@@ -187,6 +188,7 @@ const debug = {
     smooth: [],         // { lat, lon, acc, count }
     discarded: 0,
     lastInterval: null, // ms between the last two raw fixes
+    eles: [],           // { time, ele }: track elevation at the snapped position, last stop-time window
 };
 
 // ---------- Rendering ----------
@@ -278,6 +280,22 @@ function pushLimited(list, item) {
     if (list.length > DEBUG_HISTORY) list.shift();
 }
 
+// Track-elevation change over the stop-time window, shown moving or stopped, so
+// a slow climb can be compared with standing still on a slope to pick the
+// "...unless the track climbed more than" setting (a stop needs the change at or below it).
+function climbLine(now) {
+    if (!track?.profile) return 'Climb    – (track has no elevations)';
+    const w = trimToWindow(debug.eles, now, settings.stopTimeS * 1000);
+    if (w.length < 2) return `Climb    – (waiting for fixes)`;
+    const range = elevationRange(w);
+    const spanS = (w[w.length - 1].time - w[0].time) / 1000;
+    const net = w[w.length - 1].ele - w[0].ele;
+    const rate = spanS > 0 ? Math.round(Math.abs(net) / spanS * 3600) : 0;
+    return `Climb    ${range.toFixed(1)} m in ${Math.round(spanS)} s (net ${net >= 0 ? '+' : '−'}${Math.abs(net).toFixed(1)} m, ` +
+        `${rate} m/h); limit ${settings.stopClimbM} m` +
+        (range > settings.stopClimbM ? ' → not a stop' : '');
+}
+
 function renderDebug() {
     const box = $('debug-box');
     box.hidden = !settings.debug;
@@ -298,7 +316,8 @@ function renderDebug() {
         stopped
             ? `Stop     inside ${Math.round(motion.radius)} m of stop centre`
             : `Stop chk spread ${motion.history.length > 1 ? Math.round(motion.spread()) : 0} m of ${Math.round(motion.radius)} m, ` +
-              `climb ${motion.climb().toFixed(1)} m of ${settings.stopClimbM} m, need ${settings.stopTimeS} s`,
+              `need ${settings.stopTimeS} s`,
+        climbLine(now),
         hike.progress ? `Snapped  ${formatDistance(hike.progress.along)}, ${formatMetres(hike.progress.offset)} off` : 'Snapped  –',
         `Walked   ${formatDistance(motion.walked)}`,
     ];
@@ -320,7 +339,12 @@ function resetTrip() {
     const wasRecording = motion.lastTick != null;
     motion.reset();
     smoother.reset();
-    if (wasRecording) motion.start(Date.now());
+    path.reset();
+    if (wasRecording) {
+        motion.start(Date.now());
+        path.startSegment();
+    }
+    debug.eles = [];
     debug.raw = [];
     debug.smooth = [];
     debug.discarded = 0;
@@ -346,6 +370,7 @@ function saveRecording() {
         trackKey: trackKey(),
         running: hike.running,
         motion: motion.snapshot(),
+        path: path.snapshot(),
         prevAlong: hike.prevAlong,
         progress: hike.progress,
         savedAt: Date.now(),
@@ -365,6 +390,7 @@ async function restoreRecording() {
 
     const apply = () => {
         motion.restore(saved.motion);
+        path.restore(saved.path);
         if (saved.trackKey && saved.trackKey === trackKey() && saved.progress) {
             hike.prevAlong = saved.prevAlong;
             hike.progress = saved.progress;
@@ -642,8 +668,22 @@ function onFix(position) {
     // to tell a slow steep climb from a stop.
     const loc = track && motion.state !== 'STOPPED' ? locateOnTrack(track, smoothed, hike.prevAlong) : null;
     const ele = loc && track.profile ? profileAt(track, track.profile, loc.along).ele : null;
-    if (motion.update(smoothed, raw.acc, now, ele)) saveRecording();
+    const anchor = motion.anchor; // update() clears it when walking resumes
+    const change = motion.update(smoothed, raw.acc, now, ele);
     const stopped = motion.state === 'STOPPED';
+
+    // Recorded path: elevations from the track only while near it.
+    if (change === 'stopped') path.stop(motion.anchor, motion.stoppedSince);
+    if (change === 'resumed') path.resume(anchor, now);
+    if (!stopped) path.add({ ...smoothed, ele: loc && loc.offset <= settings.offTrackM ? ele : null, time: now });
+    if (change) saveRecording();
+
+    if (settings.debug && track?.profile) {
+        // While stopped the track isn't snapped for progress; snap here for the debug figure only.
+        const at = loc ?? locateOnTrack(track, smoothed, hike.prevAlong);
+        debug.eles.push({ time: now, ele: loc ? ele : profileAt(track, track.profile, at.along).ele });
+        debug.eles = trimToWindow(debug.eles, now, settings.stopTimeS * 1000);
+    }
 
     // While stopped, progress and position stay frozen at the stop's centre,
     // so jitter can neither move the numbers nor raise an off-track alarm.
@@ -749,6 +789,7 @@ function startHike() {
     setStatus($('gps-status'), SIMULATE ? 'Simulating GPS' : 'Waiting for GPS…', 'warn');
     requestWakeLock();
     motion.start(Date.now());
+    path.startSegment();
     if (SIMULATE) {
         startSimulation();
     } else {
@@ -781,6 +822,7 @@ function stopHike() {
     hike.lastFixAt = 0;
     motion.pause(Date.now());
     smoother.reset();
+    debug.eles = [];
     renderWalk();
     saveRecording();
     releaseWakeLock();
@@ -918,6 +960,48 @@ $('reverse-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
     setTrack(track.name, track.points.slice().reverse());
     toast('Track direction reversed.');
+});
+
+// ---------- GPX export ----------
+
+// iPhone/iPad and Mac Safari: the Share sheet (Save to Files, AirDrop, Messages).
+// Elsewhere, or if sharing is refused: a normal download.
+// Must run straight from the tap: Safari only shares inside a user gesture.
+function exportGpx(text, fileName, title) {
+    const file = new File([text], fileName, { type: 'application/gpx+xml' });
+    if (navigator.canShare?.({ files: [file] })) {
+        navigator.share({ files: [file], title }).catch((err) => {
+            if (err.name !== 'AbortError') downloadFile(file); // AbortError: the user closed the sheet
+        });
+        return;
+    }
+    downloadFile(file);
+}
+
+function downloadFile(file) {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    toast(`Downloaded ${file.name}`);
+}
+
+$('export-track-btn').addEventListener('click', () => {
+    if (!track) return toast('No track loaded.');
+    const name = track.name || 'Track';
+    exportGpx(buildGpx({ name, segments: [track.points] }), gpxFileName(name), name);
+});
+
+$('export-hike-btn').addEventListener('click', () => {
+    if (path.pointCount < 2) return toast('Nothing recorded yet: press Start and walk a little.');
+    const start = path.startTime;
+    const base = track?.name || 'Hike';
+    exportGpx(buildGpx({ name: `${base} (walked)`, segments: path.snapshot(), time: start }),
+        gpxFileName(`${base} walked`, start), `${base} (walked)`);
 });
 
 $('clear-btn').addEventListener('click', () => {
