@@ -42,6 +42,17 @@ export const DEM = {
     ],
 };
 
+// Trail routing for the planner (decided 2026-10-28): openrouteservice, foot-hiking
+// profile. Each user enters their own free key in Settings (never in this code).
+// Free key: 2,000 routes a day, 40 a minute. Attribution required.
+export const ROUTER = {
+    name: 'openrouteservice',
+    url: 'https://api.openrouteservice.org/v2/directions/foot-hiking/geojson',
+    signupUrl: 'https://openrouteservice.org/dev/#/signup',
+    limits: '2,000 routes a day, 40 a minute',
+    attribution: 'Routes © openrouteservice.org by HeiGIT · map data © OpenStreetMap contributors',
+};
+
 // Elevation data for hill shading and 3D terrain; null keeps the map flat (2D).
 // To enable, use the DEM above as a MapLibre 'raster-dem' source:
 //   export const TERRAIN = {

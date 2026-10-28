@@ -19,7 +19,8 @@ Live site (once published): https://rinociardo.github.io/trails/
 | `dem.js` | Elevations from DEM tiles: tile maths, terrarium decoding, interpolation (unit-tested) |
 | `dem-tiles.js` | Downloads and decodes the DEM tiles in the browser (keeps the last 48 in memory) |
 | `plan.js` | Track planning: points, segments, undo, sampling, slope, simplifying (unit-tested) |
-| `planner.js` | The planner screen: map editing, live totals, steep warning, save/export |
+| `planner.js` | The planner screen: map editing, trail routing and fallbacks, live totals, steep warning, save/export |
+| `router.js` | Trail routing (openrouteservice); the only file that talks to the routing service |
 | `tracker.js` | GPS smoothing, moving/stopped detection, walked distance and times, the walked path for export (unit-tested) |
 | `profile-chart.js` | The elevation profile chart in the trip panel |
 | `map-view.js` | Everything MapLibre: track, position dot, follow mode, 3D terrain hook |
@@ -105,11 +106,14 @@ The steps are in the order you should run them.
 14. **Elevations from the DEM.** With signal, open one of your GPX files that has no elevations (or the exported free walk from step 11).
    *Expect:* for a second the panel says "getting … points from the DEM", then `Elevation: N of N points · N from the DEM (Terrain Tiles)` and ↑/↓ totals. A GPX with its own elevations says `Elevation: all N points from the file`. Compare with Maps 3D PRO on a familiar route: within a few % (summits come out a little low on the DEM's 30 m grid).
    **Offline:** Airplane Mode, open such a file. *Expect:* "DEM not reachable (offline?)"; turn Airplane Mode off and the elevations fill in by themselves (or Settings › Track › Fill elevations).
-15. **Plan a track on the Mac.** Open https://rinociardo.github.io/trails/ in Safari. Settings › Saved walks › **New track**.
-   *Expect:* a top bar with the name field and a hint, the toolbar shows Undo / Save / Export / Done, and the pointer is a crosshair over the map.
-   Click 4–5 places along a valley you know. *Expect:* dashed purple lines between green (start) and red (end) points, and in the panel `2.35 km · ↑ 320 m · ↓ 120 m · 5 points` with a profile (it updates a moment after each click).
+15. **Plan a track on the Mac.** Open https://rinociardo.github.io/trails/ in Safari.
+   **Key first:** create your free key at openrouteservice.org (Settings › Planning has the link), then paste it into Settings › Planning › **openrouteservice key**. *Expect:* "Key saved on this device".
+   Settings › Saved walks › **New track**. *Expect:* a top bar with the name field, a hint and the openrouteservice credit; the toolbar shows Undo / **Next: Trail** / Save / Export / Done; the pointer is a crosshair over the map.
+   Click 4–5 places along paths you know. *Expect:* after a moment each new segment becomes a **solid** purple line following the footpaths (it is faint while it is being looked up), between green (start) and red (end) points, and in the panel `2.35 km · ↑ 320 m · ↓ 120 m · 5 points` with a profile.
+   **Straight:** tap **Next: Trail** so it says **Next: Straight**, and click a point across open ground: a **dashed** straight segment. Tap the small circle in the middle of any segment to switch it between trail and straight (Undo switches it back).
+   **Fallbacks** (messages appear in a dark box at the top of the map): click a point far from any path (in a lake, a field): "no trail found… drawn straight". Click a point where the path would make a long detour (across a river with the bridge far away): "the trail would be 4.2× the straight distance… drawn straight" (the limit is 3×). Settings › Planning: clear the key, then add a trail segment: "No openrouteservice key: drawn straight"; type a wrong key: "openrouteservice refused the key". Planning keeps working in every case. Put your key back afterwards.
    **Move:** drag a point (the pointer becomes a hand over it): the line and totals follow. **Delete:** click a point. **Insert:** drag one of the small circles in the middle of a segment. **Undo** (or Cmd+Z) reverses each step; a drag is one step.
-   **Steep:** add a point so a straight line crosses a steep slope (a valley side, a cliff). *Expect:* that segment turns orange and the top bar says "⚠ Straight segment N crosses slopes up to 4x°". Settings › Planning sets the limit (default 30°).
+   **Steep:** add a point so a straight line crosses a steep slope (a valley side, a cliff). *Expect:* that segment turns orange and the box at the top says e.g. "⚠ Straight segment 2 crosses slopes up to 34° (68%); the warning starts at 20° (36%)". Settings › Planning sets the limit (default 20°). Trail segments never warn.
    Type a name, **Save**: "Saved … in Settings › Saved walks". **Export**: the Share sheet (or a download) with `Name_2026-10-28.gpx`; Maps 3D PRO should show the same line and similar ↑/↓. **Done** leaves the planner.
    Settings › Saved walks › **Edit** on it: the same points come back; change one, Save, and Load it: the new version.
    **Edit a recorded walk:** Edit on a saved walk shows its path as many points on solid lines (trail segments); Save makes a new entry `… (edited)` and keeps the walk.
@@ -149,4 +153,4 @@ Ascent/descent are counted with a **5 m threshold**: a climb or drop only counts
 | …for at least | 30 s | brief pauses count as stops | you want stops recognised sooner |
 | …unless the track climbed more than | 3 m (= 360 m/h) | standing on a steep slope isn't detected as a stop | slow steep climbs still show "Stopped" |
 | Off-track distance on straight segments | 100 m | cross-country parts alert too often | you want to stay closer to the line |
-| Steep-slope warning (planner) | 30° | the warning shows on slopes you find fine | it misses slopes you'd avoid |
+| Steep-slope warning (planner) | 20° (36%) | the warning shows on slopes you find fine | it misses slopes you'd avoid |

@@ -49,6 +49,14 @@ wanted eventually.
   Europe is the 30 m EU-DEM). The same tiles are meant for 3D terrain/hill shading later.
   Checked: Lake Garda 61 m (surface ≈65), Monte Cimone 2127 m (2165), Mont Blanc 4780 m
   (4808): summits come out a little low on a 30 m grid.
+- **Trail routing: openrouteservice, `foot-hiking` profile** (chosen by the user 2026-10-28).
+  Only `router.js` talks to it (its address, limits and credit are `ROUTER` in
+  `map-config.js`), so another service can replace it there. The user enters their **own
+  free key** in Settings › Planning (kept in this device's settings in localStorage, which
+  the user's other apps on rinociardo.github.io could read); **a key must never be in the
+  repo**. Free key: 2,000 routes a day, 40 a minute. Attribution "Routes © openrouteservice.org
+  by HeiGIT · map data © OpenStreetMap contributors" is always shown in the planner bar and in
+  Settings › Data sources.
 - No build step: plain HTML/JS/CSS served as-is; ES modules.
 - **Hosting: GitHub Pages**, repo `rinociardo/trails`, URL https://rinociardo.github.io/trails/.
   HTTPS is required for GPS, the service worker and installing. The `rinociardo.github.io`
@@ -227,9 +235,11 @@ wanted eventually.
 - Mainly for the Mac (mouse), also iPhone/iPad (touch). Settings › Saved walks › **New
   track** opens the planner; **Edit** on a saved entry edits it. Not available while a hike
   is running.
-- Tap/click the map to add a point at the end, joined by a straight line. Drag a point to
-  move it; tap it to delete it (an inner point's two segments become one). Each segment has a
-  small middle handle: drag it to insert a point. **Undo** button (also Cmd/Ctrl+Z on the
+- Tap/click the map to add a point at the end, joined by a segment of the type shown on the
+  **Next: Trail / Next: Straight** button (starts on Trail when a key is set, otherwise
+  Straight). Drag a point to move it; tap it to delete it (an inner point's two segments
+  become one). Each segment has a small handle in the middle of its line: drag it to insert a
+  point, **tap it to switch the segment between trail and straight**. **Undo** button (also Cmd/Ctrl+Z on the
   Mac; up to 200 steps, a drag is one step). Double-tap zoom is off while planning.
   Hit area around points: 10 px with a mouse, 22 px with a finger.
 - Live totals in the panel header (distance, ↑, ↓, number of points) and the elevation
@@ -240,7 +250,7 @@ wanted eventually.
   line with elevations (the segment types are not in the GPX). **Done** leaves (asks if
   unsaved).
 - Saved entry: `points` (the sampled line with `ele` and `straight` per point, what a hike
-  follows) plus `plan: { vertices, segments }` (what the planner edits).
+  follows) plus `plan: { vertices, segments, routes }` (what the planner edits).
 - Editing a **recorded walk** simplifies it (Douglas-Peucker, 3 m) into draggable points on
   "trail" segments (they followed real paths) and saves a **new** entry `Name (edited)`, so
   the recording is kept.
@@ -248,28 +258,48 @@ wanted eventually.
 ### Cross-country (straight) segments (requested 2026-10-28)
 - Every segment is either **"trail"** (follow trails) or **"straight"** (a straight line);
   stored per segment. Straight segments are drawn **dashed**, trail segments solid.
-- Step 1 (done in v0.7.0): no routing, so every segment drawn in the planner is straight;
-  switching a segment's type comes with step 2. Edited recorded walks are "trail".
-- Step 2 (with routing, to build): switch a segment either way; if the router finds no path,
-  or its path is **more than 3×** the straight distance, fall back to a straight segment and
-  say so.
-- **Steep-slope warning** (done in v0.7.0): straight segments are checked against the
-  terrain slope from the DEM (central differences, 15 m each way, at every 25 m sample). Above
-  the setting (Settings › Planning, default **30°**) the segment turns orange and the top bar
-  says e.g. "⚠ Straight segment 1 crosses slopes up to 48°". It is terrain slope, not the
+- Step 1 (v0.7.0): no routing, every planned segment was straight. Edited recorded walks
+  are "trail" segments that keep the walked path as their line (no routing needed).
+- Step 2 (done in v0.8.0): see "Stage 2 Plan, step 2" below.
+- **Steep-slope warning** (done in v0.7.0; default and % changed 2026-10-28, v0.8.0): straight
+  segments are checked against the terrain slope from the DEM (central differences, 15 m each
+  way, at every 25 m sample). Above the setting (Settings › Planning, default **20° = 36%**;
+  installs that still had the old default 30° move to 20°) the segment turns orange and the
+  message says e.g. "⚠ Straight segment 1 crosses slopes up to 34° (68%); the warning starts
+  at 20° (36%)". Slopes are always shown in **degrees and %** (grade = tan × 100). It is terrain slope, not the
   line's own gradient: a line along a steep hillside also warns. Checked at Lauterbrunnen:
   a line across the valley warns (48°), none at a 60° limit.
 - **Hike tolerance** (done in v0.7.0): on straight segments the off-track limit is Settings ›
   Alerts › "…on straight (cross-country) segments", default **100 m** (normal limit 50 m).
   Tested by simulation: 91 m from a straight line with limits 50/200 m raised no alert.
 
-### Stage 2 Plan, step 2: snap to trails (proposal, waiting for the user's choice)
-Proposal of 2026-10-28 (all four allow calls from a browser, CORS checked):
+### Stage 2 Plan, step 2: snap to trails (done in v0.8.0, requested 2026-10-28)
+- Each "trail" segment is routed between its two points with openrouteservice `foot-hiking`
+  (one request per segment, one at a time; answers remembered in memory, 200 at most, so
+  undo/redo and reopening cost nothing). The route is joined to the two points (the router
+  starts on the nearest path). Saved plans keep `routes` per segment, so reopening a saved
+  track makes no requests. Moving a point re-routes its two segments; inserting re-routes
+  both halves.
+- A segment being routed is drawn faint. Trail segments are solid, straight ones dashed.
+- **Fallback to straight, with a message** (never breaks planning): no route found (also: no
+  path within 350 m of a point); route **more than 3×** the straight distance ("the trail
+  would be 4.2× the straight distance (5.1 km instead of 1.2 km)"); no key; key refused;
+  daily/minute limit reached (429); service unreachable or any other error. In the last four
+  cases every segment waiting for a route goes straight, and a toast also appears. Tapping a
+  segment's middle handle twice (straight → trail) tries again; failures are not remembered.
+- Messages, the steep warning and "Finding trails…" show in a dark box floating over the top
+  of the map, which taps pass through: changing them must not resize the map (that shifted
+  everything under the finger). Toasts also let taps through (v0.8.0).
+- Tested in a headless browser with openrouteservice answers faked for each case (route,
+  detour 21.7×, no route, 429, refused key): all fall back as above; a saved and reopened
+  plan made no new requests. Not yet tested with a real key.
+
+Routing services compared on 2026-10-28 (all four allow calls from a browser, CORS checked):
 - **openrouteservice** (HeiGIT): free key, 2,000 routes/day, 40/min; `foot-hiking` profile.
   access=private/no paths excluded unless foot is allowed. Key would be visible in a public
-  page, so let the user enter their own key in Settings. Recommended.
+  page, so the user enters their own key in Settings. Recommended and **chosen**.
 - **BRouter** (brouter.de): free, no key, best hiking profiles (`hiking-mountain` with SAC
-  limit), returns elevation. No published terms or limits for the public server (a
+  limit), returns elevation; best alternative. No published terms or limits for the public server (a
   community service; ask before app use, or self-host). access=private/no: near-prohibitive
   penalty, but only a small one if the way is part of a marked hiking route.
 - **GraphHopper**: free plan 500 credits/day, non-commercial, 5 points per request; blocks
@@ -283,7 +313,6 @@ per changed segment.
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
   (needs the offline map source decision; must respect provider terms and storage limits).
-- Stage 2 Plan, step 2: snap to trails (routing service to choose, see above).
 - Stage 1 Scout: improvements (search, locate me, topographic layer, trail overlay).
 - 3D terrain and hill shading (hook exists in `map-config.js`: `TERRAIN`).
 
@@ -307,6 +336,7 @@ per changed segment.
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
 - Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
-  side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen.
+  side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `router.js`
+  the routing service.
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
   distance walked in that time is missing from the recording.

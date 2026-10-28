@@ -7,6 +7,7 @@ import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
 import { createPlanner } from './planner.js';
+import { ROUTER_ATTRIBUTION, ROUTER_SIGNUP_URL } from './router.js';
 
 // Developer switches: ?sim (or ?sim=N for N× walking speed, default 10) replays
 // the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
@@ -33,7 +34,8 @@ const DEFAULT_SETTINGS = {
     stopTimeS: DEFAULT_TRACKING.stopTimeS,
     stopClimbM: DEFAULT_TRACKING.stopClimbM,
     eleThresholdM: DEFAULT_ELEVATION_THRESHOLD_M,
-    steepSlopeDeg: 30,      // planner: warn when a straight segment crosses steeper terrain
+    steepSlopeDeg: 20,      // planner: warn when a straight segment crosses steeper terrain (≈36%)
+    orsKey: '',             // the user's own openrouteservice key (never in the code)
     debug: false,
     simulate: false,
     panelOpen: true,
@@ -45,7 +47,13 @@ const $ = (id) => document.getElementById(id);
 
 function loadSettings() {
     try {
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+        const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+        // v0.8.0 lowered the steep-slope default from 30° to 20°: move the old default along.
+        if (!stored.steepDefault20) {
+            if (stored.steepSlopeDeg === 30) delete stored.steepSlopeDeg;
+            stored.steepDefault20 = true;
+        }
+        return { ...DEFAULT_SETTINGS, ...stored };
     } catch {
         return { ...DEFAULT_SETTINGS };
     }
@@ -1052,6 +1060,7 @@ $('settings-btn').addEventListener('click', () => {
     $('set-offtrack').value = settings.offTrackM;
     $('set-offtrack-straight').value = settings.offTrackStraightM;
     $('set-steep').value = settings.steepSlopeDeg;
+    $('set-orskey').value = settings.orsKey;
     $('set-sound').checked = settings.sound;
     $('set-autodim').value = String(settings.autoDimS);
     $('set-maxacc').value = settings.maxAccuracyM;
@@ -1093,6 +1102,15 @@ bindNumberSetting('set-stoptime', 'stopTimeS', applyTracking);
 bindNumberSetting('set-stopclimb', 'stopClimbM', applyTracking);
 bindNumberSetting('set-offtrack-straight', 'offTrackStraightM');
 bindNumberSetting('set-steep', 'steepSlopeDeg', () => planner.refresh());
+
+$('set-orskey').addEventListener('change', (e) => {
+    settings.orsKey = e.target.value.trim();
+    e.target.value = settings.orsKey;
+    saveSettings();
+    toast(settings.orsKey ? 'Key saved on this device: new planned segments follow trails.' : 'Key removed: planned segments will be straight.');
+});
+$('ors-signup').href = ROUTER_SIGNUP_URL;
+$('router-credit').textContent = ROUTER_ATTRIBUTION;
 bindNumberSetting('set-elethreshold', 'eleThresholdM', () => {
     if (!track) return;
     track.profile = buildProfile(track, settings.eleThresholdM);

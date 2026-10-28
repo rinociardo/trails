@@ -1,6 +1,6 @@
 // Offline support for the app itself (not map tiles).
 // Bump VERSION on every release: it names the cache and is shown in Settings.
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const CACHE_PREFIX = 'trails-';
 const CACHE = `${CACHE_PREFIX}${VERSION}`;
 
@@ -18,6 +18,7 @@ const APP_FILES = [
     './dem-tiles.js',
     './plan.js',
     './planner.js',
+    './router.js',
     './tracker.js',
     './profile-chart.js',
     './map-view.js',

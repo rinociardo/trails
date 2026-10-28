@@ -226,6 +226,7 @@
             bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px) + 36px);
             transform: translateX(-50%);
             z-index: 1002;
+            pointer-events: none; /* never blocks a tap on the map below */
             max-width: calc(100% - 32px);
             padding: 10px 16px;
             border-radius: 20px;
@@ -240,7 +241,9 @@
         /* Track planner: its own top bar and toolbar; the panel keeps only the profile. */
         body:not(.plan-mode) .plan-only, body.plan-mode .plan-hide { display: none !important; }
         body.plan-mode #profile { display: block !important; }
-        body.plan-mode #toolbar { grid-template-columns: repeat(4, 1fr); }
+        body.plan-mode #toolbar { grid-template-columns: repeat(5, 1fr); }
+        #plan-type { font-size: 13px; }
+        #plan-type.active { border-color: var(--profile-marker); color: var(--profile-marker); }
         .plan-bar { display: flex; flex-direction: column; gap: 4px; }
         .plan-bar input {
             font: inherit; font-size: 17px; font-weight: 600;
@@ -248,7 +251,23 @@
             background: rgba(255,255,255,.12); color: var(--on-brand);
         }
         .plan-hint { font-size: 12px; color: var(--on-brand-muted); }
-        .plan-warning { font-size: 13px; font-weight: 600; color: #ffd8a8; }
+        .plan-credit { font-size: 10px; color: var(--on-brand-muted); }
+        /* Planner messages float over the map: showing or hiding them must not
+           resize the map, which would move everything under the finger. Taps go through. */
+        #plan-messages {
+            position: fixed;
+            top: calc(var(--stats-h, 0px) + 8px);
+            left: 8px; right: 8px;
+            z-index: 1000;
+            display: flex; flex-direction: column; gap: 6px;
+            pointer-events: none;
+        }
+        #plan-messages > div {
+            padding: 6px 10px; border-radius: 8px;
+            font-size: 13px; line-height: 1.35;
+            background: rgba(0,0,0,.78); color: #f1f3f5;
+        }
+        #plan-messages .plan-warning { color: #ffd8a8; font-weight: 600; }
 
         /* ---- Bottom toolbar ---- */
         #toolbar {
@@ -336,8 +355,8 @@
     <header id="stats">
         <div class="plan-bar plan-only">
             <input type="text" id="plan-name" aria-label="Track name" placeholder="Track name" autocomplete="off">
-            <div class="plan-hint">Tap the map to add a point · drag a point to move it · tap it to delete · drag a small circle to insert a point</div>
-            <div class="plan-warning" id="plan-warning" hidden></div>
+            <div class="plan-hint">Tap the map to add a point · drag a point to move it · tap it to delete · drag a small circle to insert a point, tap it to switch trail/straight</div>
+            <div class="plan-credit" id="plan-credit"></div>
         </div>
         <div class="stat-row plan-hide">
             <div class="stat track-only"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
@@ -356,6 +375,11 @@
     </header>
 
     <div id="debug-box" hidden></div>
+
+    <div id="plan-messages" class="plan-only">
+        <div class="plan-notice" id="plan-notice" hidden></div>
+        <div class="plan-warning" id="plan-warning" hidden></div>
+    </div>
 
     <section id="trip-panel" aria-label="Trip">
         <button type="button" id="trip-toggle" aria-expanded="true">
@@ -406,6 +430,7 @@
         <button type="button" class="tool plan-hide" id="dim-btn">Dim</button>
         <button type="button" class="tool plan-hide" id="settings-btn">Settings</button>
         <button type="button" class="tool plan-only" id="plan-undo">Undo</button>
+        <button type="button" class="tool plan-only" id="plan-type">Next: Trail</button>
         <button type="button" class="tool plan-only" id="plan-save">Save</button>
         <button type="button" class="tool plan-only" id="plan-export">Export</button>
         <button type="button" class="tool primary plan-only" id="plan-done">Done</button>
@@ -511,9 +536,14 @@
             <p class="hint">"New track" plans a route on the map; "Edit" changes a saved one. Editing a recorded walk saves a new track and keeps the recording.</p>
 
             <h3>Planning</h3>
+            <label class="field">openrouteservice key (for following trails)
+                <input type="text" id="set-orskey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
+            </label>
+            <p class="hint">Trail segments follow footpaths using openrouteservice (<code>foot-hiking</code>). Get a free key at <a id="ors-signup" target="_blank" rel="noopener">openrouteservice.org</a> (2,000 routes a day). The key is kept only on this device, never in the app's code. Without it, or when its daily limit is reached, segments are drawn straight.</p>
             <label class="field">Warn when a straight segment crosses slopes steeper than (degrees)
                 <input type="number" id="set-steep" min="10" max="60" step="1" inputmode="numeric">
             </label>
+            <p class="hint">Slopes are shown in degrees and as a grade: 15° = 27%, 20° = 36%, 30° = 58%, 45° = 100%.</p>
 
             <h3>Export (GPX)</h3>
             <div class="actions">
@@ -524,7 +554,7 @@
             <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it; a free recording, made with no track loaded, has none and says so in the file). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file.</p>
 
             <h3>Data sources</h3>
-            <p class="hint">The map credits are on the map itself. Elevations (DEM):</p>
+            <p class="hint">The map credits are on the map itself. <span id="router-credit"></span>. Elevations (DEM):</p>
             <ul class="credits" id="dem-credits"></ul>
 
             <h3>This device</h3>

@@ -82,7 +82,11 @@ function buildStyle(basemap) {
                 id: 'plan-trail', type: 'line', source: 'plan',
                 filter: ['all', ['==', ['get', 'kind'], 'segment'], ['==', ['get', 'type'], 'trail']],
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
-                paint: { 'line-color': ['case', ['get', 'steep'], PLAN_STEEP_COLOR, PLAN_COLOR], 'line-width': 4 },
+                paint: {
+                    'line-color': ['case', ['get', 'steep'], PLAN_STEEP_COLOR, PLAN_COLOR],
+                    'line-width': 4,
+                    'line-opacity': ['case', ['get', 'pending'], 0.4, 1], // still being routed
+                },
             },
             {
                 id: 'plan-straight', type: 'line', source: 'plan',
@@ -152,21 +156,21 @@ function enableTerrain(map, terrain) {
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 }
 
-// plan: { vertices: [{lat, lon}], segments: ['straight'|'trail'], steep: Set of segment indexes }
-function planGeoJson({ vertices, segments, steep }) {
+// plan: { vertices: [{lat, lon}], segments: ['straight'|'trail'], lines: [[{lat, lon}]] per
+// segment, mids: [{lat, lon}] per segment, steep and pending: Sets of segment indexes }
+function planGeoJson({ vertices, segments, lines, mids, steep, pending }) {
     const features = [];
     const coord = (v) => [v.lon, v.lat];
     segments.forEach((type, i) => {
-        const a = vertices[i], b = vertices[i + 1];
         features.push({
             type: 'Feature',
-            properties: { kind: 'segment', type, steep: steep.has(i), index: i },
-            geometry: { type: 'LineString', coordinates: [coord(a), coord(b)] },
+            properties: { kind: 'segment', type, steep: steep.has(i), pending: pending.has(i), index: i },
+            geometry: { type: 'LineString', coordinates: lines[i].map(coord) },
         });
         features.push({
             type: 'Feature',
             properties: { kind: 'mid', index: i },
-            geometry: { type: 'Point', coordinates: [(a.lon + b.lon) / 2, (a.lat + b.lat) / 2] },
+            geometry: { type: 'Point', coordinates: coord(mids[i]) },
         });
     });
     vertices.forEach((v, i) => {
@@ -234,8 +238,8 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
     map.on('dragstart', () => { following = false; });
 
     // ---- Track planner editing: mouse and touch ----
-    // handlers: { add(p), tapVertex(i), dragVertex(i, p, phase), dragMid(s, p, phase) }
-    // with phase 'start' | 'move' | 'end'. Tapping a segment's middle handle does nothing (yet).
+    // handlers: { add(p), tapVertex(i), tapMid(s), dragVertex(i, p, phase), dragMid(s, p, phase) }
+    // with phase 'start' | 'move' | 'end'.
     let planHandlers = null;
     let drag = null;          // { kind, index, start: {x, y}, moved, touch }
     let suppressClickUntil = 0;
@@ -287,6 +291,7 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
         map.off(drag.touch ? 'touchmove' : 'mousemove', onMove);
         if (drag.moved) dragCallback('end', e.lngLat);
         else if (drag.kind === 'vertex') planHandlers.tapVertex(drag.index);
+        else planHandlers.tapMid(drag.index);
         drag = null;
         suppressClickUntil = Date.now() + 400; // the click that follows is not "add a point"
     }

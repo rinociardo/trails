@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanEditor, densify, slopeProbes, slopeFromProbes, steepSegments, simplify } from '../plan.js';
+import { PlanEditor, densify, slopeProbes, slopeFromProbes, steepSegments, simplify, routeLine, midpoint, planFromWalk, lineLength } from '../plan.js';
 import { haversine } from '../geo.js';
 
 const M = 1 / 111195; // degrees of latitude per metre
@@ -67,4 +67,56 @@ test('plan: simplify a recorded walk', () => {
     const s = simplify(walk, 3);
     assert.equal(s.length, 3);
     assert.equal(s[1], walk[50]);
+});
+
+test('plan: routes are cleared by edits next to them, kept by undo', () => {
+    const plan = new PlanEditor({ vertices: [at(0), at(100), at(200), at(300)], segments: ['trail', 'trail', 'straight'] });
+    assert.deepEqual(plan.unrouted, [0, 1]);
+    const r0 = [at(0), at(50, 10), at(100)], r1 = [at(100), at(150, 10), at(200)];
+    plan.setRoute(0, r0);
+    plan.setRoute(1, r1);
+    assert.deepEqual(plan.unrouted, []);
+    plan.checkpoint();
+    plan.move(1, at(100, 20)); // both segments at point 1 need routing again
+    assert.deepEqual(plan.unrouted, [0, 1]);
+    plan.undo();
+    assert.equal(plan.routes[0], r0, 'undo brings the route back without asking the router');
+    plan.insert(1, at(150));
+    assert.deepEqual(plan.unrouted, [1, 2]);
+    assert.equal(plan.routes[0], r0);
+    plan.undo();
+    plan.fallBack(1); // no usable route: straight, not an undo step
+    assert.deepEqual(plan.segments, ['trail', 'straight', 'straight']);
+    plan.setType(1, 'trail');
+    assert.deepEqual(plan.unrouted, [1]);
+    plan.undo();
+    assert.deepEqual(plan.segments, ['trail', 'straight', 'straight']);
+    plan.remove(1); // merged segment needs routing again
+    assert.deepEqual(plan.segments, ['trail', 'straight']);
+    assert.equal(plan.routes[0], null);
+});
+
+test('plan: a route more than 3× the straight distance is not used', () => {
+    const a = at(0), b = at(100);
+    const near = routeLine(a, b, [at(0, 5), at(50, 20), at(100, 5)]);
+    assert.ok(near.line && near.ratio < 1.5);
+    assert.equal(near.line[0], a);
+    assert.equal(near.line.at(-1), b);
+    const detour = routeLine(a, b, [at(0, 5), at(0, 200), at(100, 200), at(100, 5)]); // ≈ 510 m for 100 m
+    assert.equal(detour.line, null);
+    assert.ok(detour.ratio > 3);
+    assert.ok(Math.abs(haversine(midpoint([at(0), at(100), at(100, 100)]), at(100)) < 0.01));
+});
+
+test('plan: densify follows routes; a walk becomes trail segments with its own path', () => {
+    const plan = { vertices: [at(0), at(100)], segments: ['trail'], routes: [[at(0), at(50, 50), at(100)]] };
+    const pts = densify(plan);
+    assert.ok(Math.abs(lineLength(pts) - lineLength(plan.routes[0])) < 0.5);
+    assert.ok(pts.every((p) => !p.straight));
+    const walk = [];
+    for (let i = 0; i <= 100; i++) walk.push(at(i * 5, i <= 50 ? 0 : (i - 50) * 5));
+    const w = planFromWalk(walk);
+    assert.deepEqual(w.segments, ['trail', 'trail']);
+    assert.equal(w.routes[0].length, 51);
+    assert.equal(new PlanEditor(w).unrouted.length, 0);
 });

@@ -1,25 +1,51 @@
 // Track planning: a list of vertices joined by segments, each either
-// 'straight' (cross-country, a straight line) or 'trail' (follows paths; until
-// routing exists, also drawn as given). Pure logic, no browser APIs.
+// 'straight' (cross-country, a straight line) or 'trail' (follows paths: its
+// line comes from the router). Pure logic, no browser APIs.
 
 import { haversine } from './geo.js';
 
 export const SEGMENT_STRAIGHT = 'straight';
 export const SEGMENT_TRAIL = 'trail';
 const UNDO_LIMIT = 200;
+export const MAX_DETOUR_RATIO = 3; // a trail route longer than this × the straight line is not used
 
-// vertices: [{ lat, lon }]; segments[i] joins vertices i and i+1.
+// vertices: [{ lat, lon }]; segments[i] joins vertices i and i+1; routes[i] is
+// the trail line of segment i from vertex to vertex ([{ lat, lon }]), or null
+// while it is straight or still has to be routed. Moving a point clears the
+// routes of its two segments.
 export class PlanEditor {
-    constructor({ vertices = [], segments = [] } = {}) {
+    constructor({ vertices = [], segments = [], routes = [] } = {}) {
         this.vertices = vertices.map(({ lat, lon }) => ({ lat, lon }));
-        this.segments = vertices.length > 1
-            ? Array.from({ length: vertices.length - 1 }, (_, i) => segments[i] ?? SEGMENT_STRAIGHT)
-            : [];
+        const n = Math.max(0, vertices.length - 1);
+        this.segments = Array.from({ length: n }, (_, i) => segments[i] ?? SEGMENT_STRAIGHT);
+        this.routes = Array.from({ length: n }, (_, i) => (this.segments[i] === SEGMENT_TRAIL ? routes[i] ?? null : null));
         this.history = [];
     }
 
+    // Route lines are never changed in place, so they can be shared with the snapshot.
     snapshot() {
-        return { vertices: this.vertices.map((v) => ({ ...v })), segments: [...this.segments] };
+        return { vertices: this.vertices.map((v) => ({ ...v })), segments: [...this.segments], routes: [...this.routes] };
+    }
+
+    // Trail segments that still need a route.
+    get unrouted() {
+        return this.segments.map((t, i) => (t === SEGMENT_TRAIL && !this.routes[i] ? i : -1)).filter((i) => i >= 0);
+    }
+
+    // The line drawn for segment s: its route, or straight from point to point.
+    line(s) {
+        return this.routes[s] ?? [this.vertices[s], this.vertices[s + 1]];
+    }
+
+    // Router results are not undo steps: they follow from the edit that needed them.
+    setRoute(s, route) {
+        this.routes[s] = route;
+    }
+
+    // No usable route: the segment becomes straight (an undo brings the trail back).
+    fallBack(s) {
+        this.segments[s] = SEGMENT_STRAIGHT;
+        this.routes[s] = null;
     }
 
     // Call before every change (once per drag), so Undo goes back one step.
@@ -37,6 +63,7 @@ export class PlanEditor {
         if (!previous) return false;
         this.vertices = previous.vertices;
         this.segments = previous.segments;
+        this.routes = previous.routes;
         return true;
     }
 
@@ -44,12 +71,17 @@ export class PlanEditor {
     append(p, type = SEGMENT_STRAIGHT) {
         this.checkpoint();
         this.vertices.push({ lat: p.lat, lon: p.lon });
-        if (this.vertices.length > 1) this.segments.push(type);
+        if (this.vertices.length > 1) {
+            this.segments.push(type);
+            this.routes.push(null);
+        }
     }
 
     // No checkpoint: a drag calls checkpoint() once at its start.
     move(i, p) {
         this.vertices[i] = { lat: p.lat, lon: p.lon };
+        if (i > 0) this.routes[i - 1] = null;
+        if (i < this.routes.length) this.routes[i] = null;
     }
 
     // Removing an inner point joins its two segments into one (the first one's type).
@@ -58,9 +90,16 @@ export class PlanEditor {
         this.vertices.splice(i, 1);
         const n = this.segments.length;
         if (n === 0) return;
-        if (i === 0) this.segments.shift();
-        else if (i === n) this.segments.pop(); // the last point
-        else this.segments.splice(i - 1, 2, this.segments[i - 1]);
+        if (i === 0) {
+            this.segments.shift();
+            this.routes.shift();
+        } else if (i === n) { // the last point
+            this.segments.pop();
+            this.routes.pop();
+        } else {
+            this.segments.splice(i - 1, 2, this.segments[i - 1]);
+            this.routes.splice(i - 1, 2, null);
+        }
     }
 
     // Splits segment s at p; both halves keep its type. Returns the new vertex index.
@@ -68,6 +107,7 @@ export class PlanEditor {
         this.checkpoint();
         this.vertices.splice(s + 1, 0, { lat: p.lat, lon: p.lon });
         this.segments.splice(s, 0, this.segments[s]);
+        this.routes.splice(s, 1, null, null);
         return s + 1;
     }
 
@@ -75,22 +115,58 @@ export class PlanEditor {
         if (this.segments[s] === type) return;
         this.checkpoint();
         this.segments[s] = type;
+        this.routes[s] = null;
     }
 }
 
-// Point at fraction t between a and b (straight in lat/lon: fine at hiking distances).
-const lerp = (a, b, t) => ({ lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) });
+// Length of a line of points, in metres.
+export function lineLength(line) {
+    let m = 0;
+    for (let i = 1; i < line.length; i++) m += haversine(line[i - 1], line[i]);
+    return m;
+}
 
-// Track points along the plan: every vertex, plus points every stepM on long
-// segments so the DEM can give the profile between them. Each point carries
-// seg (its segment index) and straight (true on cross-country segments).
-export function densify({ vertices, segments }, stepM = 25) {
+// The router's path, joined to the two points (the router starts and ends on the
+// nearest path, which may be off the clicked spot). Returns { line, ratio } with
+// line null when the route is unusable: longer than maxRatio × the straight line.
+export function routeLine(a, b, path, maxRatio = MAX_DETOUR_RATIO) {
+    const line = [a, ...path, b].filter((p, i, all) => i === 0 || p.lat !== all[i - 1].lat || p.lon !== all[i - 1].lon);
+    const straight = haversine(a, b);
+    const ratio = straight > 0 ? lineLength(line) / straight : 1;
+    return { line: ratio > maxRatio ? null : line, ratio, lengthM: lineLength(line), straightM: straight };
+}
+
+// Halfway along a line (where the segment's middle handle goes).
+export function midpoint(line) {
+    const half = lineLength(line) / 2;
+    let walked = 0;
+    for (let i = 1; i < line.length; i++) {
+        const d = haversine(line[i - 1], line[i]);
+        if (walked + d >= half) return lerp(line[i - 1], line[i], d ? (half - walked) / d : 0);
+        walked += d;
+    }
+    return line[0];
+}
+
+// Point at fraction t between a and b (straight in lat/lon: fine at hiking distances).
+function lerp(a, b, t) {
+    return { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
+}
+
+// Track points along the plan: every vertex and route point, plus points every
+// stepM where they are further apart, so the DEM can give the profile between
+// them. Each point carries seg (its segment index) and straight (true on
+// cross-country segments).
+export function densify({ vertices, segments, routes = [] }, stepM = 25) {
     const points = [];
     for (let s = 0; s < segments.length; s++) {
-        const a = vertices[s], b = vertices[s + 1];
-        const n = Math.max(1, Math.ceil(haversine(a, b) / stepM));
+        const line = routes[s] ?? [vertices[s], vertices[s + 1]];
         const straight = segments[s] === SEGMENT_STRAIGHT;
-        for (let k = 0; k < n; k++) points.push({ ...lerp(a, b, k / n), ele: null, seg: s, straight });
+        for (let j = 0; j < line.length - 1; j++) {
+            const a = line[j], b = line[j + 1];
+            const n = Math.max(1, Math.ceil(haversine(a, b) / stepM));
+            for (let k = 0; k < n; k++) points.push({ ...lerp(a, b, k / n), ele: null, seg: s, straight });
+        }
     }
     const last = vertices[vertices.length - 1];
     if (last) {
@@ -157,4 +233,16 @@ export function simplify(points, toleranceM = 3) {
         }
     }
     return points.filter((_, i) => keep[i]);
+}
+
+// A recorded walk as a plan: simplified points on "trail" segments whose
+// routes are the walked path between them, so nothing needs routing.
+export function planFromWalk(points, toleranceM = 3) {
+    const vertices = simplify(points, toleranceM);
+    const index = vertices.map((v) => points.indexOf(v));
+    return {
+        vertices,
+        segments: vertices.slice(1).map(() => SEGMENT_TRAIL),
+        routes: vertices.slice(1).map((_, s) => points.slice(index[s], index[s + 1] + 1).map(({ lat, lon }) => ({ lat, lon }))),
+    };
 }
