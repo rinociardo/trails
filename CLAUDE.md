@@ -39,8 +39,8 @@ wanted eventually.
   (© OpenStreetMap contributors, linked to openstreetmap.org/copyright, always visible).
   OSM's tile policy forbids bulk/offline downloading, so these tiles must **never** be
   cached for offline use. **The offline map source is still to be decided** (Stage 3).
-- **DEM (Digital Elevation Model): Terrain Tiles** (decided 2026-10-28; proposed by Claude,
-  open for review), open data on AWS (registry.opendata.aws/terrain-tiles), terrarium PNG
+- **DEM (Digital Elevation Model): Terrain Tiles** (proposed by Claude and **confirmed by
+  the user 2026-10-28**), open data on AWS (registry.opendata.aws/terrain-tiles), terrarium PNG
   tiles to z15, `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`.
   Free to use, caching allowed; attribution required (Mapzen plus the national data
   sources: list in `map-config.js` `DEM.credits`, shown in Settings › Data sources). Open to
@@ -174,7 +174,7 @@ wanted eventually.
   stays unused); the file says so in `<desc>` ("No elevation data…") in `<metadata>` and
   `<trk>`. The same note is written for any recorded hike with no elevation at all. Later:
   fill from a DEM.
-- Loading a track resets the recording, but a free walk is **protected** first (see "Keeping
+- Loading a track resets the recording, but the walk is **protected** first (see "Keeping
   recordings").
 - Simulated GPS with no track walks a 2 km square (10 points per side) from the last
   recorded point, or the map centre, so free recording can be tested without walking.
@@ -188,13 +188,14 @@ wanted eventually.
   restore; not while dimmed (caught up when the dim screen is tapped).
 
 ### Keeping recordings (done in v0.6.0, requested 2026-10-28)
-- A free recording (no track loaded, at least 2 points) that hasn't been **exported** or
-  **saved as a track** is protected: Open GPX, Load sample, Test loop, loading a saved walk
-  and "Start fresh" in the Resume prompt first ask **"Keep your walk?" Export / Save as
-  track / Discard / Cancel**. Export goes ahead only if the file was really shared or
-  downloaded (closing the Share sheet keeps the question open). Points recorded after an
-  export/save make it unsaved again. Hike recordings made with a track are not protected
-  (not requested).
+- Any recording (at least 2 points; **free or with a track**: decided 2026-10-28, v0.6.1)
+  that hasn't been **exported** or **saved as a track** is protected: Open GPX, Load sample,
+  Test loop, loading a saved walk, "Start fresh" in the Resume prompt and Settings › Reset
+  walked/time first ask **"Keep your walk?" Export / Save as track / Discard / Cancel**
+  (Reset keeps its plain confirmation once the walk is saved). Export goes ahead only if
+  the file was really shared or downloaded (closing the Share sheet keeps the question
+  open). Points recorded after an export/save make it unsaved again. Reverse direction and
+  Remove track don't clear the recording, so they don't ask.
 - **Save as track** (panel button after a recording, and Settings › Export): stores the
   walked path (segments joined, doubled stop points removed) in **Settings › Saved walks**
   (IndexedDB key `library`), named `Walk YYYY-MM-DD HH:MM` (with a track: `Track (walked …)`).

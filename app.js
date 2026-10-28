@@ -1092,8 +1092,12 @@ $('set-simulate').addEventListener('change', (e) => {
     location.reload();
 });
 
-$('reset-trip-btn').addEventListener('click', () => {
-    if (confirm('Reset walked distance and moving/stopped time to zero?')) resetTrip();
+$('reset-trip-btn').addEventListener('click', async () => {
+    if (walkUnsaved()) {
+        if (await keepRecording('Resetting walked/time')) resetTrip();
+    } else if (confirm('Reset walked distance and moving/stopped time to zero?')) {
+        resetTrip();
+    }
 });
 
 $('set-offtrack').addEventListener('change', (e) => {
@@ -1185,9 +1189,8 @@ async function exportHike() {
 
 // ---------- Keeping recordings: Save as track, saved walks, "keep it?" ----------
 
-// A walk recorded with no track loaded is the only copy of that route, so it is
-// protected until exported or saved as a track (more points recorded since count
-// as unsaved again).
+// A recorded walk (with or without a track) is protected until exported or saved
+// as a track (more points recorded since count as unsaved again).
 function walkUnsaved() {
     return path.pointCount >= 2 && path.pointCount !== hike.savedPoints;
 }
@@ -1198,13 +1201,14 @@ function markWalkSaved(pointCount = path.pointCount) {
     renderWalk();
 }
 
-// Asks before an action that clears a free recording that is neither exported
-// nor saved. Resolves true to go ahead (exported, saved or discarded).
+// Asks before an action that clears a recording that is neither exported nor
+// saved. Resolves true to go ahead (exported, saved or discarded).
 function keepRecording(action) {
-    if (track || !walkUnsaved()) return Promise.resolve(true);
+    if (!walkUnsaved()) return Promise.resolve(true);
     setText($('keep-details'),
-        `Your walk (${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}) was recorded ` +
-        `without a track and hasn't been exported or saved as a track. ${action} clears it.`);
+        `Your walk (${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}` +
+        `${track ? ` along “${track.name || 'the track'}”` : ', no track'}) hasn't been exported or saved as a track. ` +
+        `${action} clears it.`);
     const dialog = $('keep-dialog');
     dialog.showModal();
     return new Promise((resolve) => {
