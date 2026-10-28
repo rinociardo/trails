@@ -39,6 +39,16 @@ wanted eventually.
   (© OpenStreetMap contributors, linked to openstreetmap.org/copyright, always visible).
   OSM's tile policy forbids bulk/offline downloading, so these tiles must **never** be
   cached for offline use. **The offline map source is still to be decided** (Stage 3).
+- **DEM (Digital Elevation Model): Terrain Tiles** (decided 2026-10-28; proposed by Claude,
+  open for review), open data on AWS (registry.opendata.aws/terrain-tiles), terrarium PNG
+  tiles to z15, `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`.
+  Free to use, caching allowed; attribution required (Mapzen plus the national data
+  sources: list in `map-config.js` `DEM.credits`, shown in Settings › Data sources). Open to
+  any website (CORS `*`); the EU copy of the bucket refuses public access, so the US one is
+  used. Elevations are read at **z14** (≈7 m pixels at 45° N; the data behind most of
+  Europe is the 30 m EU-DEM). The same tiles are meant for 3D terrain/hill shading later.
+  Checked: Lake Garda 61 m (surface ≈65), Monte Cimone 2127 m (2165), Mont Blanc 4780 m
+  (4808): summits come out a little low on a 30 m grid.
 - No build step: plain HTML/JS/CSS served as-is; ES modules.
 - **Hosting: GitHub Pages**, repo `rinociardo/trails`, URL https://rinociardo.github.io/trails/.
   HTTPS is required for GPS, the service worker and installing. The `rinociardo.github.io`
@@ -71,8 +81,8 @@ wanted eventually.
 - Use the **track's** elevation at my snapped position, never GPS altitude (too noisy).
 - Smooth elevations before summing ascent/descent. Chosen: **5 m hysteresis** (a climb or
   drop only counts once it exceeds 5 m), adjustable in Settings to compare with Maps 3D PRO.
-- GPX without elevations shows "no elevation data". Later: fill from a DEM (Digital
-  Elevation Model) source.
+- GPX without elevations: missing elevations are filled from the DEM (see "Elevations from
+  the DEM"); "no elevation data" only shows while that hasn't worked (offline).
 
 ### Position smoothing (done in v0.3.0)
 - Discard fixes whose reported accuracy is worse than **30 m**.
@@ -151,8 +161,6 @@ wanted eventually.
   (README step 10). Verified in a headless browser: re-imported track gives identical
   totals.
 - `.gitignore` still blocks all personal `*.gpx` files.
-- Not yet: showing the walked path as a line on the map (only the position dot and, in the
-  debug view, recent fixes are drawn).
 
 ### Free recording (done in v0.5.0, requested 2026-10-28)
 - **Start works with no track loaded**: records the walk with smoothing, stop detection,
@@ -166,11 +174,53 @@ wanted eventually.
   stays unused); the file says so in `<desc>` ("No elevation data…") in `<metadata>` and
   `<trk>`. The same note is written for any recorded hike with no elevation at all. Later:
   fill from a DEM.
-- Loading a track resets the recording (as before), so export a free walk first.
+- Loading a track resets the recording, but a free walk is **protected** first (see "Keeping
+  recordings").
 - Simulated GPS with no track walks a 2 km square (10 points per side) from the last
   recorded point, or the map centre, so free recording can be tested without walking.
-- "Test loop here" creates a track **without elevations** (label says so): the Climb line,
-  ascent/descent and profile stay empty with it.
+- "Test loop here" used to have no elevations; since v0.6.0 it gets them from the DEM (when
+  online), so the label no longer says "no elevations".
+
+### Walked path on the map (done in v0.6.0, requested 2026-10-28)
+- The recorded path is drawn as a **pink line** (`#d6336c`, white casing) over the map, in
+  free mode and also with a track (planned track stays blue). One line per Start..Stop.
+- Battery: redrawn at most every **5 s**, at once on moving/stopped changes, Stop, reset and
+  restore; not while dimmed (caught up when the dim screen is tapped).
+
+### Keeping recordings (done in v0.6.0, requested 2026-10-28)
+- A free recording (no track loaded, at least 2 points) that hasn't been **exported** or
+  **saved as a track** is protected: Open GPX, Load sample, Test loop, loading a saved walk
+  and "Start fresh" in the Resume prompt first ask **"Keep your walk?" Export / Save as
+  track / Discard / Cancel**. Export goes ahead only if the file was really shared or
+  downloaded (closing the Share sheet keeps the question open). Points recorded after an
+  export/save make it unsaved again. Hike recordings made with a track are not protected
+  (not requested).
+- **Save as track** (panel button after a recording, and Settings › Export): stores the
+  walked path (segments joined, doubled stop points removed) in **Settings › Saved walks**
+  (IndexedDB key `library`), named `Walk YYYY-MM-DD HH:MM` (with a track: `Track (walked …)`).
+  Elevations: the planned track's where the walk followed it, the DEM for the rest. Saved
+  walks can be loaded (and followed) or deleted. Saving does not load it, so "Export my
+  hike" still works on the recording afterwards.
+
+### Elevations from the DEM (done in v0.6.0, requested 2026-10-28)
+- Any track with points lacking elevation (GPX without `<ele>`, saved walks, the test loop)
+  gets them from the DEM when loaded, **only for the missing points** (elevations in the
+  file are kept). Bilinear interpolation, one download per tile (6 at a time), at most 150
+  tiles per track (otherwise nothing is fetched: "track too spread out"). Results are saved
+  with the track, so it happens once.
+- Offline: the track loads without them; retried automatically when the phone goes online,
+  or with Settings › Track › **Fill elevations**.
+- **Track info** line in the panel: `Elevation: 812 of 812 points · 812 from the DEM (Terrain
+  Tiles)` (or "all N points from the file", or how many are still missing and why).
+- GPS altitude is still never used. Exported hikes stay as recorded (no DEM elevations in
+  "Export my hike"); "Export track" of a DEM-filled track includes them.
+
+### Reopening the app (done in v0.6.0, requested 2026-10-28)
+- Settings › Remove track already existed (since v0.2.0).
+- The **test loop is temporary**: not restored on reopening unless a hike with it was
+  running (it is then restored and the Resume prompt shows).
+- With no track: the map opens where the last recording ended, else on the **current
+  position** (one location request, cached up to 5 min, no dot drawn until Start).
 
 ### Still to build
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
@@ -197,7 +247,8 @@ wanted eventually.
 - Run locally: `python3 -m http.server 8000`; tests: `npm test`.
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js` and the writer in `gpx.js`, unit-tested in `tests/`;
-  keep it free of browser APIs so it stays testable with Node.
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+  keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
+  side of the DEM (fetch + decode PNG tiles).
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
   distance walked in that time is missing from the recording.

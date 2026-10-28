@@ -17,6 +17,7 @@ function buildStyle(basemap) {
         sources: {
             basemap: basemap.source,
             track: { type: 'geojson', data: EMPTY },
+            walked: { type: 'geojson', data: EMPTY },
             accuracy: { type: 'geojson', data: EMPTY },
             debug: { type: 'geojson', data: EMPTY },
         },
@@ -38,6 +39,17 @@ function buildStyle(basemap) {
                 filter: ['==', ['geometry-type'], 'LineString'],
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: { 'line-color': '#1d4ed8', 'line-width': 4.5 },
+            },
+            // The path actually walked: on top of the planned track, in a different colour.
+            {
+                id: 'walked-casing', type: 'line', source: 'walked',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#ffffff', 'line-width': 5.5 },
+            },
+            {
+                id: 'walked-line', type: 'line', source: 'walked',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#d6336c', 'line-width': 3 },
             },
             {
                 id: 'track-ends', type: 'circle', source: 'track',
@@ -160,6 +172,19 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
 
         setTrack(points) {
             ready.then(() => map.getSource('track').setData(trackGeoJson(points)));
+        },
+
+        // segments: arrays of { lat, lon } (one per Start..Stop); empty clears it.
+        setWalked(segments) {
+            const lines = segments.filter((seg) => seg.length > 1).map((seg) => seg.map((p) => [p.lon, p.lat]));
+            const data = lines.length
+                ? { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } }
+                : EMPTY;
+            ready.then(() => map.getSource('walked').setData(data));
+        },
+
+        jumpTo({ lat, lon }, zoom = 15) {
+            map.jumpTo({ center: [lon, lat], zoom });
         },
 
         clearTrack() {

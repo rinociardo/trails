@@ -2,7 +2,8 @@
 
 A hiking Progressive Web App (PWA): open a GPX track, follow it with live GPS,
 see distance done/remaining, and get an alert when you stray from the route.
-With no track loaded, Start records a free walk that you can export as GPX.
+With no track loaded, Start records a free walk that you can export as GPX or save as a
+track; tracks without elevations get them from a DEM (Digital Elevation Model).
 
 Live site (once published): https://rinociardo.github.io/trails/
 
@@ -15,6 +16,8 @@ Live site (once published): https://rinociardo.github.io/trails/
 | `geo.js` | Distance maths and "where am I on the track" (unit-tested in `tests/`) |
 | `gpx.js` | Reads GPX files and writes them for export (unit-tested) |
 | `elevation.js` | Ascent/descent (5 m threshold) and elevation at any point of the track (unit-tested) |
+| `dem.js` | Elevations from DEM tiles: tile maths, terrarium decoding, interpolation (unit-tested) |
+| `dem-tiles.js` | Downloads and decodes the DEM tiles in the browser |
 | `tracker.js` | GPS smoothing, moving/stopped detection, walked distance and times, the walked path for export (unit-tested) |
 | `profile-chart.js` | The elevation profile chart in the trip panel |
 | `map-view.js` | Everything MapLibre: track, position dot, follow mode, 3D terrain hook |
@@ -76,7 +79,7 @@ The steps are in the order you should run them.
    Walk about 60 m away from the line: within a few seconds you get the banner and a beep. Come back: it clears.
    **Stop test:** stand still for a minute. *Expect:* after 30 s "Stopped 0:30", Walked stops growing, and no off-track alarm. Walk on: "Moving", and Walked grows again.
    **Debug view** (Settings › Testing): orange dots are raw GPS fixes, blue dots the smoothed position, red rings discarded fixes, and a purple dashed circle the stop area. The blue trail should be steadier than the orange, about 2 s behind you.
-   **Climb line** (debug box, needs a track with elevations, e.g. one of your GPX files; the test loop has none, so it shows "track has no elevations"): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop`. Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
+   **Climb line** (debug box, needs a track with elevations: the test loop gets them from the DEM when created with signal, check the panel says `Elevation: 41 of 41 points · 41 from the DEM`): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop`. Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
 8. **Wake Lock.** While hiking, the top bar shows **Screen awake**. Leave the phone untouched for 2 minutes.
    *Expect:* after 1 minute the screen goes black with large dim numbers (auto-dim), but the phone does **not** lock.
 9. **Background.** Press Start, switch to another app for 1 minute, come back.
@@ -90,11 +93,19 @@ The steps are in the order you should run them.
    *Expect:* "No track — Open GPX, or Start to record"; the big numbers are **Walked / Moving / Avg speed** (not Done / Remaining / From track), and the panel shows only the Walked/Moving/Stopped/Avg row: no table, no profile.
    **Simulated** (quick, indoors): Settings › Testing › Simulated GPS on and Debug view on, press Start. *Expect:* "Free recording (no track)", Walked and Moving grow, after about 50 s "Stopped" (the simulation pauses 45 s), never an OFF TRACK banner; the debug box says `Climb – (no track)` and `Snapped –`. Force-close and reopen: **Resume hike?** with the walked distance; Resume continues from where it was.
    **Real** (outdoors, Simulated GPS off): press Start and walk a few hundred metres, stop for a minute, walk on, press Stop.
-   Then Settings › **Export my hike** › Save to Files. *Expect:* a file `Free-recording_2026-10-28.gpx`. Open it with Open GPX: it loads as a track with your walk's shape, and the panel says **no elevation data** (that is expected: elevations will come from a DEM, a Digital Elevation Model, later). In the Files app's preview or a text editor the file begins with `No elevation data (GPS altitude is not used)`.
-   Note: opening a GPX (or loading the sample) resets the recording, so export the free walk first.
-12. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
+   *Expect:* a **pink line** on the map following where you walked (a short gap at the end is normal: it is redrawn every 5 s), and a **Save as track** link in the panel after Stop.
+   Then Settings › **Export my hike** › Save to Files. *Expect:* a file `Free-recording_2026-10-28.gpx`; in the Files app's preview or a text editor it begins with `No elevation data (GPS altitude is not used)`. Open it with Open GPX (with signal): it loads as a track with your walk's shape, and gets elevations from the DEM (see step 14).
+12. **Keep your walk?** Record a short free walk (step 11, simulated is fine) and do **not** export it. Then Settings › Load sample track.
+   *Expect:* a **Keep your walk?** box: Export / Save as track / Discard / Cancel. **Cancel**: nothing changes. Try again and tap **Export**, then close the Share sheet without choosing anything: the box stays. Choose Save to Files: the sample loads.
+   Record another walk, load the sample, tap **Save as track**. *Expect:* "Saved “Walk 2026-10-28 15:40” in Settings › Saved walks", then the sample loads. Settings › **Saved walks** › Load: your walk is the track; the panel says `Elevation: N of N points · N from the DEM (Terrain Tiles)` and the profile shows its ups and downs. Delete removes it.
+   Also with a track: walk part of the sample (simulation), Stop: the pink walked line sits on top of the blue planned track.
+13. **Reopening.** Settings › Test loop here, then force-close and reopen without pressing Start. *Expect:* no track (the test loop is not kept) and the map opens **on your position**. Repeat with Start pressed before the force-close: the loop is back with the Resume prompt.
+14. **Elevations from the DEM.** With signal, open one of your GPX files that has no elevations (or the exported free walk from step 11).
+   *Expect:* for a second the panel says "getting … points from the DEM", then `Elevation: N of N points · N from the DEM (Terrain Tiles)` and ↑/↓ totals. A GPX with its own elevations says `Elevation: all N points from the file`. Compare with Maps 3D PRO on a familiar route: within a few % (summits come out a little low on the DEM's 30 m grid).
+   **Offline:** Airplane Mode, open such a file. *Expect:* "DEM not reachable (offline?)"; turn Airplane Mode off and the elevations fill in by themselves (or Settings › Track › Fill elevations).
+15. **Offline.** Open the app once with signal, then switch on Airplane Mode and reopen it from the Home Screen.
    *Expect:* the app opens, with your track and live position. The map background may be blank: offline map tiles are not built yet.
-13. **Update.** After a new version is published, open the app with signal.
+16. **Update.** After a new version is published, open the app with signal.
    *Expect:* a "New version installed — Reload" banner. Settings › App version shows the new number.
 
 ### If Wake Lock fails

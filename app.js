@@ -5,6 +5,7 @@ import { PositionSmoother, MotionTracker, PathRecorder, DEFAULT_TRACKING, trimTo
 import { createMapView } from './map-view.js';
 import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
+import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
 
 // Developer switches: ?sim (or ?sim=N for N× walking speed, default 10) replays
 // the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
@@ -18,6 +19,7 @@ const BACK_ON_TRACK_RATIO = 0.8;    // must come back inside 80% of the limit to
 const ALERT_REPEAT_MS = 60_000;
 const STALE_FIX_MS = 30_000;
 const DEBUG_HISTORY = 60;           // fixes kept for the debug view
+const WALKED_REDRAW_MS = 5000;      // the walked line is redrawn at most this often
 const SETTINGS_KEY = 'trails.settings';
 const DEFAULT_SETTINGS = {
     offTrackM: 50,
@@ -70,10 +72,15 @@ function idb(mode, action) {
         open.onerror = () => reject(open.error);
         open.onsuccess = () => {
             const db = open.result;
-            const tx = db.transaction('kv', mode);
-            const request = action(tx.objectStore('kv'));
-            tx.oncomplete = () => { db.close(); resolve(request.result); };
-            tx.onerror = () => { db.close(); reject(tx.error); };
+            try {
+                const tx = db.transaction('kv', mode);
+                const request = action(tx.objectStore('kv'));
+                tx.oncomplete = () => { db.close(); resolve(request.result); };
+                tx.onerror = () => { db.close(); reject(tx.error); };
+            } catch (err) {
+                db.close();
+                reject(err);
+            }
         };
     });
 }
@@ -107,6 +114,13 @@ function formatDistance(m) {
 
 function formatMetres(m) {
     return m == null || !Number.isFinite(m) ? '–' : `${Math.round(m)} m`;
+}
+
+// Local date and time, e.g. "2026-10-28 15:40".
+function formatDateTime(time) {
+    const d = new Date(time);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function formatDuration(ms) {
@@ -161,7 +175,10 @@ const chart = createProfileChart($('profile'));
 
 // ---------- State ----------
 
-let track = null; // { name, points, cum, total, profile } (profile null without elevations)
+// { name, points, cum, total, profile, eleInfo, temporary }: profile is null without
+// elevations; eleInfo counts where they came from (see elevationText); temporary
+// marks the test loop, which is not brought back on reopening.
+let track = null;
 
 const smoother = new PositionSmoother({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
 const motion = new MotionTracker({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS, stopClimbM: settings.stopClimbM });
@@ -180,6 +197,7 @@ const hike = {
     offTrack: false,
     lastAlertAt: 0,
     dimmed: false,
+    savedPoints: 0,     // path.pointCount when the walk was last exported or saved as a track
 };
 
 // Recent fixes for the debug view.
@@ -246,7 +264,33 @@ function renderTrip() {
             : `${formatDistance(track.total)} · no elevation data`;
     }
     setText($('trip-summary'), summary);
+    setText($('track-info'), track ? elevationText(track) : '');
     if (!hike.dimmed) chart.setPosition(started ? along : null);
+}
+
+// eleInfo: { own (from the file), dem (from the DEM), missing, status:
+// 'ok' | 'loading' | 'failed' | 'tooLarge' }.
+function elevationText({ points, eleInfo: e }) {
+    const n = points.length;
+    if (e.status === 'loading') return `Elevation: getting ${e.missing} of ${n} points from the DEM (${DEM_NAME})…`;
+    if (!e.dem && !e.missing) return `Elevation: all ${n} points from the file`;
+    const parts = [];
+    if (e.own) parts.push(`${e.own} from the file`);
+    if (e.dem) parts.push(`${e.dem} from the DEM (${DEM_NAME})`);
+    if (e.missing && e.status === 'tooLarge') parts.push('track too spread out to fetch the DEM');
+    else if (e.missing) parts.push('DEM not reachable (offline?): Settings › Fill elevations retries');
+    return `Elevation: ${n - e.missing} of ${n} points · ${parts.join(' · ')}`;
+}
+
+// The path actually walked, on the map. Redrawn at most every few seconds
+// (and never while dimmed) to save battery; force after a big change.
+let walkedDrawnAt = 0;
+function renderWalkedPath(force = false) {
+    if (hike.dimmed) return;
+    const now = Date.now();
+    if (!force && now - walkedDrawnAt < WALKED_REDRAW_MS) return;
+    walkedDrawnAt = now;
+    view.setWalked(path.snapshot());
 }
 
 // Distance actually walked and moving/stopped time (from the motion tracker).
@@ -271,6 +315,8 @@ function renderWalk(now = Date.now()) {
         setText($('dim-moving'), moving);
         setText($('dim-speed'), speed);
     }
+
+    $('save-walk-btn').hidden = hike.running || !walkUnsaved();
 
     const status = $('motion-status');
     status.hidden = !hike.running;
@@ -364,8 +410,10 @@ function resetTrip() {
     debug.raw = [];
     debug.smooth = [];
     debug.discarded = 0;
+    hike.savedPoints = 0;
     renderWalk();
     renderDebug();
+    renderWalkedPath(true);
     saveRecording();
 }
 
@@ -374,8 +422,12 @@ function resetTrip() {
 const RECORDING_SAVE_EVERY_S = 10;
 
 // Identifies the loaded track, so progress is only restored onto the same one.
+function trackKeyOf(t) {
+    return `${t.name}|${t.points.length}|${Math.round(t.total)}`;
+}
+
 function trackKey() {
-    return track ? `${track.name}|${track.points.length}|${Math.round(track.total)}` : null;
+    return track ? trackKeyOf(track) : null;
 }
 
 // Saved every 10 s while hiking, on every moving/stopped change, on Start/Stop,
@@ -389,24 +441,19 @@ function saveRecording() {
         path: path.snapshot(),
         prevAlong: hike.prevAlong,
         progress: hike.progress,
+        savedPoints: hike.savedPoints,
         savedAt: Date.now(),
     };
     kvSet('recording', record).catch((err) => console.error('Saving recording failed:', err));
 }
 
-async function restoreRecording() {
-    let saved;
-    try {
-        saved = await kvGet('recording');
-    } catch (err) {
-        console.error('Loading recording failed:', err);
-        return;
-    }
+function restoreRecording(saved) {
     if (!saved || saved.motion.movingMs + saved.motion.stoppedMs === 0) return;
 
     const apply = () => {
         motion.restore(saved.motion);
         path.restore(saved.path);
+        hike.savedPoints = saved.savedPoints ?? 0;
         if (saved.trackKey && saved.trackKey === trackKey() && saved.progress) {
             hike.prevAlong = saved.prevAlong;
             hike.progress = saved.progress;
@@ -414,6 +461,7 @@ async function restoreRecording() {
         renderStats();
         renderWalk();
         renderDebug();
+        renderWalkedPath(true);
     };
     // Stopped on purpose last time: just bring the numbers back.
     if (!saved.running) {
@@ -436,14 +484,24 @@ async function restoreRecording() {
         apply();
         startHike();
     };
-    $('resume-no').onclick = () => {
+    // Start fresh discards the recording; a free one that was never exported
+    // or saved gets the same "keep it?" question as loading a track.
+    $('resume-no').onclick = async () => {
         $('resume-dialog').close();
-        kvDelete('recording').catch(() => {});
+        apply();
+        if (await keepRecording('Starting fresh')) {
+            resetTrip();
+            kvDelete('recording').catch(() => {});
+        }
     };
 }
 
-async function setTrack(name, points, { save = true } = {}) {
-    track = { name, ...buildTrack(points) };
+// eleInfo: pass the saved one when restoring; otherwise elevations in the file
+// count as "own" and missing ones are fetched from the DEM.
+async function setTrack(name, points, { save = true, eleInfo = null, temporary = false } = {}) {
+    const own = points.filter((p) => Number.isFinite(p.ele)).length;
+    track = { name, ...buildTrack(points), temporary };
+    track.eleInfo = eleInfo ? { ...eleInfo } : { own, dem: 0, missing: points.length - own, status: 'ok' };
     track.profile = buildProfile(track, settings.eleThresholdM);
     chart.setData(track, track.profile);
     hike.prevAlong = 0;
@@ -453,16 +511,50 @@ async function setTrack(name, points, { save = true } = {}) {
     view.fitTrack(points);
     renderTrackStatus();
     renderStats();
-    if (save) {
-        try {
-            await kvSet('track', { name, points });
-            requestPersistence();
-        } catch (err) {
-            console.error('Saving track failed:', err);
-            toast('Track shown, but it could not be saved on this device.');
-        }
+    if (save) await saveTrack();
+    if (track.eleInfo.missing) fillTrackElevations();
+}
+
+async function saveTrack() {
+    const { name, points, eleInfo, temporary } = track;
+    try {
+        await kvSet('track', { name, points, eleInfo: { ...eleInfo, status: eleInfo.status === 'loading' ? 'failed' : eleInfo.status }, temporary });
+        requestPersistence();
+    } catch (err) {
+        console.error('Saving track failed:', err);
+        toast('Track shown, but it could not be saved on this device.');
     }
 }
+
+// Missing elevations from the DEM (needs the network). The track keeps them,
+// so this happens once per track; Settings › Fill elevations retries.
+async function fillTrackElevations() {
+    const t = track;
+    if (!t?.eleInfo.missing || t.eleInfo.status === 'loading') return;
+    t.eleInfo.status = 'loading';
+    renderTrip();
+    let result = null;
+    try {
+        result = await fillElevationsFromDem(t.points);
+    } catch (err) {
+        console.error('DEM elevations failed:', err);
+    }
+    if (track !== t) return; // another track was loaded meanwhile
+    if (result?.filled) {
+        t.points = result.points;
+        t.eleInfo.dem += result.filled;
+        t.eleInfo.missing = result.missing;
+        t.profile = buildProfile(t, settings.eleThresholdM);
+        chart.setData(t, t.profile);
+    }
+    t.eleInfo.status = !t.eleInfo.missing ? 'ok' : result?.tooLarge ? 'tooLarge' : 'failed';
+    renderTrip();
+    if (result?.filled) await saveTrack();
+}
+
+window.addEventListener('online', () => {
+    if (track?.eleInfo.status === 'failed') fillTrackElevations();
+});
 
 async function clearTrack() {
     track = null;
@@ -479,17 +571,39 @@ async function clearTrack() {
     }
 }
 
-async function restoreTrack() {
+// On opening: the saved track (the test loop only while a hike with it was in
+// progress), then the recording. With no track, the map opens where you are.
+async function restoreAll() {
+    let savedTrack = null, savedRecording = null;
     try {
-        const saved = await kvGet('track');
-        if (saved?.points?.length >= 2) {
-            await setTrack(saved.name, saved.points, { save: false });
-            return;
-        }
+        [savedTrack, savedRecording] = await Promise.all([kvGet('track'), kvGet('recording')]);
     } catch (err) {
-        console.error('Loading saved track failed:', err);
+        console.error('Loading saved data failed:', err);
     }
-    toast('Open a GPX file to begin.');
+    if (savedTrack?.points?.length >= 2) {
+        const key = trackKeyOf({ name: savedTrack.name, ...buildTrack(savedTrack.points) });
+        if (!savedTrack.temporary || (savedRecording?.running && savedRecording.trackKey === key)) {
+            await setTrack(savedTrack.name, savedTrack.points,
+                { save: false, eleInfo: savedTrack.eleInfo, temporary: savedTrack.temporary });
+        } else {
+            kvDelete('track').catch(() => {});
+        }
+    }
+    restoreRecording(savedRecording);
+    if (!track) {
+        openOnMyPosition();
+        toast('Open a GPX file, or press Start to record a walk.');
+    }
+}
+
+// Where the last recording ended, else the current position (if location is allowed).
+function openOnMyPosition() {
+    const last = path.segments.flat().at(-1);
+    if (last) return view.jumpTo(last);
+    if (!('geolocation' in navigator)) return;
+    navigator.geolocation.getCurrentPosition((pos) => {
+        if (!track && !hike.lastFix) view.jumpTo({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+    }, () => {}, { maximumAge: 300_000, timeout: 15_000 });
 }
 
 $('gpx-input').addEventListener('change', async (event) => {
@@ -498,7 +612,9 @@ $('gpx-input').addEventListener('change', async (event) => {
     if (!file) return;
     try {
         const { name, points } = parseGpx(await file.text());
-        await setTrack(name || file.name.replace(/\.gpx$/i, ''), points);
+        const trackName = name || file.name.replace(/\.gpx$/i, '');
+        if (!await keepRecording(`Opening “${trackName}”`)) return;
+        await setTrack(trackName, points);
         resetTrip();
         toast(`Loaded ${formatDistance(track.total)} track.`);
     } catch (err) {
@@ -632,6 +748,7 @@ function exitDim() {
     $('dim-overlay').hidden = true;
     // The map and profile marker are not updated while dimmed; catch up now.
     if (hike.lastFix) view.showPosition(hike.lastFix, { offTrack: hike.offTrack });
+    renderWalkedPath(true);
     renderTrip();
     renderDebug();
 }
@@ -694,6 +811,7 @@ function onFix(position) {
     if (change === 'resumed') path.resume(anchor, now);
     if (!stopped) path.add({ ...smoothed, ele: loc && loc.offset <= settings.offTrackM ? ele : null, time: now });
     if (change) saveRecording();
+    renderWalkedPath(Boolean(change));
 
     if (settings.debug && track?.profile) {
         // While stopped the track isn't snapped for progress; snap here for the debug figure only.
@@ -867,6 +985,7 @@ function stopHike() {
     smoother.reset();
     debug.eles = [];
     renderWalk();
+    renderWalkedPath(true);
     saveRecording();
     releaseWakeLock();
     exitDim();
@@ -921,6 +1040,7 @@ $('settings-btn').addEventListener('click', () => {
     $('set-simulate').checked = SIMULATE;
     $('set-simulate').disabled = params.has('sim');
     fillDeviceInfo();
+    renderLibrary();
     $('settings').showModal();
 });
 
@@ -1002,7 +1122,7 @@ $('settings').addEventListener('close', resetIdleTimer);
 
 $('reverse-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
-    setTrack(track.name, track.points.slice().reverse());
+    setTrack(track.name, track.points.slice().reverse(), { eleInfo: track.eleInfo, temporary: track.temporary });
     toast('Track direction reversed.');
 });
 
@@ -1011,15 +1131,19 @@ $('reverse-btn').addEventListener('click', () => {
 // iPhone/iPad and Mac Safari: the Share sheet (Save to Files, AirDrop, Messages).
 // Elsewhere, or if sharing is refused: a normal download.
 // Must run straight from the tap: Safari only shares inside a user gesture.
-function exportGpx(text, fileName, title) {
+// Resolves false if the user closed the Share sheet without sharing.
+async function exportGpx(text, fileName, title) {
     const file = new File([text], fileName, { type: 'application/gpx+xml' });
     if (navigator.canShare?.({ files: [file] })) {
-        navigator.share({ files: [file], title }).catch((err) => {
-            if (err.name !== 'AbortError') downloadFile(file); // AbortError: the user closed the sheet
-        });
-        return;
+        try {
+            await navigator.share({ files: [file], title });
+            return true;
+        } catch (err) {
+            if (err.name === 'AbortError') return false; // the user closed the sheet
+        }
     }
     downloadFile(file);
+    return true;
 }
 
 function downloadFile(file) {
@@ -1040,15 +1164,166 @@ $('export-track-btn').addEventListener('click', () => {
     exportGpx(buildGpx({ name, segments: [track.points] }), gpxFileName(name), name);
 });
 
-$('export-hike-btn').addEventListener('click', () => {
-    if (path.pointCount < 2) return toast('Nothing recorded yet: press Start and walk a little.');
+$('export-hike-btn').addEventListener('click', () => exportHike());
+
+async function exportHike() {
+    if (path.pointCount < 2) {
+        toast('Nothing recorded yet: press Start and walk a little.');
+        return false;
+    }
     const start = path.startTime;
     const base = track?.name || 'Free recording';
     const name = track ? `${base} (walked)` : base;
     // Free recordings (or a track without elevations): say so, to fill from a DEM later.
     const desc = path.hasElevations ? '' : NO_ELEVATION_DESC;
-    exportGpx(buildGpx({ name, desc, segments: path.snapshot(), time: start }),
+    const pointCount = path.pointCount;
+    const exported = await exportGpx(buildGpx({ name, desc, segments: path.snapshot(), time: start }),
         gpxFileName(track ? `${base} walked` : base, start), name);
+    if (exported) markWalkSaved(pointCount);
+    return exported;
+}
+
+// ---------- Keeping recordings: Save as track, saved walks, "keep it?" ----------
+
+// A walk recorded with no track loaded is the only copy of that route, so it is
+// protected until exported or saved as a track (more points recorded since count
+// as unsaved again).
+function walkUnsaved() {
+    return path.pointCount >= 2 && path.pointCount !== hike.savedPoints;
+}
+
+function markWalkSaved(pointCount = path.pointCount) {
+    hike.savedPoints = pointCount;
+    saveRecording();
+    renderWalk();
+}
+
+// Asks before an action that clears a free recording that is neither exported
+// nor saved. Resolves true to go ahead (exported, saved or discarded).
+function keepRecording(action) {
+    if (track || !walkUnsaved()) return Promise.resolve(true);
+    setText($('keep-details'),
+        `Your walk (${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}) was recorded ` +
+        `without a track and hasn't been exported or saved as a track. ${action} clears it.`);
+    const dialog = $('keep-dialog');
+    dialog.showModal();
+    return new Promise((resolve) => {
+        const done = (ok) => {
+            dialog.close();
+            resolve(ok);
+        };
+        // Export runs straight from the tap (needed for the Share sheet); closing
+        // the sheet without sharing leaves the question open.
+        $('keep-export').onclick = async () => { if (await exportHike()) done(true); };
+        $('keep-save').onclick = async () => {
+            $('keep-save').disabled = true;
+            const saved = await saveWalkAsTrack();
+            $('keep-save').disabled = false;
+            if (saved) done(true);
+        };
+        $('keep-discard').onclick = () => done(true);
+        $('keep-cancel').onclick = () => done(false);
+        dialog.oncancel = () => resolve(false); // Escape key
+    });
+}
+
+// The recorded path as one line of track points (Start..Stop segments joined,
+// the doubled stop centres removed).
+function walkedPoints() {
+    const points = [];
+    for (const p of path.segments.flat()) {
+        const prev = points[points.length - 1];
+        if (prev && prev.lat === p.lat && prev.lon === p.lon) continue;
+        points.push({ lat: p.lat, lon: p.lon, ele: p.ele });
+    }
+    return points;
+}
+
+const loadLibrary = async () => (await kvGet('library')) || [];
+
+// Saves the walk to Settings › Saved walks, with elevations: the planned
+// track's where the walk followed it, the DEM's for the rest.
+async function saveWalkAsTrack() {
+    const points = walkedPoints();
+    if (points.length < 2) {
+        toast('Nothing recorded yet: press Start and walk a little.');
+        return false;
+    }
+    const pointCount = path.pointCount;
+    const name = track ? `${track.name} (walked ${formatDateTime(path.startTime)})` : `Walk ${formatDateTime(path.startTime)}`;
+    const own = points.filter((p) => Number.isFinite(p.ele)).length;
+    toast(`Saving “${name}”: getting elevations from the DEM…`, 20_000);
+    let result = null;
+    try {
+        result = await fillElevationsFromDem(points);
+    } catch (err) {
+        console.error('DEM elevations failed:', err);
+    }
+    const dem = result?.filled ?? 0;
+    const missing = points.length - own - dem;
+    const entry = {
+        id: `walk-${Date.now()}`,
+        name,
+        points: result?.points ?? points,
+        eleInfo: { own, dem, missing, status: !missing ? 'ok' : result?.tooLarge ? 'tooLarge' : 'failed' },
+        savedAt: Date.now(),
+    };
+    try {
+        await kvSet('library', [...await loadLibrary(), entry]);
+        requestPersistence();
+    } catch (err) {
+        console.error('Saving walk failed:', err);
+        toast('Could not save the walk on this device.', 5000);
+        return false;
+    }
+    markWalkSaved(pointCount);
+    renderLibrary();
+    toast(`Saved “${name}” in Settings › Saved walks. ` +
+        (missing ? `${missing} points still need elevations (offline?): they are fetched when you load it.` : 'Elevations from the DEM.'), 7000);
+    return true;
+}
+
+$('save-walk-btn').addEventListener('click', () => saveWalkAsTrack());
+$('save-walk-settings-btn').addEventListener('click', () => saveWalkAsTrack());
+
+async function renderLibrary() {
+    const list = $('library');
+    let entries = [];
+    try {
+        entries = await loadLibrary();
+    } catch (err) {
+        console.error('Loading saved walks failed:', err);
+    }
+    list.replaceChildren(...entries.slice().reverse().map((entry) => {
+        const row = document.createElement('div');
+        row.className = 'library-row';
+        const label = document.createElement('span');
+        label.textContent = `${entry.name} · ${formatDistance(buildTrack(entry.points).total)}`;
+        const load = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Load' });
+        load.addEventListener('click', async () => {
+            if (!await keepRecording(`Loading “${entry.name}”`)) return;
+            await setTrack(entry.name, entry.points, { eleInfo: entry.eleInfo });
+            resetTrip();
+            $('settings').close();
+            toast(`Loaded ${formatDistance(track.total)} track.`);
+        });
+        const del = Object.assign(document.createElement('button'), { type: 'button', className: 'danger', textContent: 'Delete' });
+        del.addEventListener('click', async () => {
+            if (!confirm(`Delete “${entry.name}” from this device?`)) return;
+            await kvSet('library', (await loadLibrary()).filter((e) => e.id !== entry.id));
+            renderLibrary();
+        });
+        row.append(label, load, del);
+        return row;
+    }));
+    $('library-empty').hidden = entries.length > 0;
+}
+
+$('fill-ele-btn').addEventListener('click', () => {
+    if (!track) return toast('No track loaded.');
+    if (!track.eleInfo.missing) return toast('All points already have elevations.');
+    fillTrackElevations();
+    $('settings').close();
 });
 
 $('clear-btn').addEventListener('click', () => {
@@ -1061,6 +1336,7 @@ $('sample-btn').addEventListener('click', async () => {
         const response = await fetch('samples/sample-loop.gpx');
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const { name, points } = parseGpx(await response.text());
+        if (!await keepRecording('Loading the sample track')) return;
         await setTrack(name, points);
         resetTrip();
         $('settings').close();
@@ -1071,16 +1347,18 @@ $('sample-btn').addEventListener('click', async () => {
 });
 
 // A square loop (~200 m sides) starting where you stand, for a walk-around test.
-// No elevations: the Climb line and ascent/descent stay empty with it.
-$('test-loop-btn').addEventListener('click', () => {
+// Elevations come from the DEM (when online). Temporary: not brought back on
+// reopening unless a hike with it was in progress.
+$('test-loop-btn').addEventListener('click', async () => {
     if (!('geolocation' in navigator)) return toast('This browser cannot access GPS.');
+    if (!await keepRecording('Creating the test loop')) return;
     toast('Getting your position…', 10_000);
     navigator.geolocation.getCurrentPosition((pos) => {
         const points = squareLoop({ lat: pos.coords.latitude, lon: pos.coords.longitude }, 200);
-        setTrack('Test loop', points);
+        setTrack('Test loop', points, { temporary: true });
         resetTrip();
         $('settings').close();
-        toast('Test loop created: north, east, south, back to start. It has no elevations.');
+        toast('Test loop created: north, east, south, back to start.');
     }, onGeoError, { enableHighAccuracy: true, timeout: 20_000 });
 });
 
@@ -1141,4 +1419,5 @@ renderTrackStatus();
 renderStats();
 renderWalk();
 renderDebug();
-restoreTrack().then(restoreRecording);
+$('dem-credits').replaceChildren(...DEM_CREDITS.map((text) => Object.assign(document.createElement('li'), { textContent: text })));
+restoreAll();

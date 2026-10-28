@@ -104,6 +104,14 @@
             font-size: 12px; color: var(--panel-muted); font-variant-numeric: tabular-nums;
         }
         .walk-row b { color: var(--panel-text); font-weight: 600; }
+        .walk-row .link-btn {
+            margin-left: auto; padding: 0; border: 0; background: none;
+            font: inherit; font-weight: 600; color: var(--profile-marker);
+        }
+        .track-info { margin-top: 4px; font-size: 11px; color: var(--panel-muted); }
+        .library-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
+        .library-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .credits { margin: 4px 0 0; padding-left: 18px; font-size: 11px; color: var(--panel-muted); }
 
         .profile { position: relative; height: 96px; margin-top: 6px; touch-action: none; }
         .profile canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -356,11 +364,13 @@
                 <div class="profile-tip" hidden></div>
                 <div class="profile-empty" hidden>No elevation data in this track</div>
             </div>
+            <div class="track-info track-only" id="track-info"></div>
             <div class="walk-row">
                 <span>Walked <b id="w-walked">–</b></span>
                 <span>Moving <b id="w-moving">–</b></span>
                 <span>Stopped <b id="w-stopped">–</b></span>
                 <span>Avg <b id="w-speed">–</b></span>
+                <button type="button" class="link-btn" id="save-walk-btn" hidden>Save as track</button>
             </div>
         </div>
     </section>
@@ -459,18 +469,29 @@
             <h3>Track</h3>
             <div class="actions">
                 <button type="button" id="reverse-btn">Reverse direction</button>
-                <button type="button" id="test-loop-btn">Test loop here (no elevations)</button>
+                <button type="button" id="test-loop-btn">Test loop here</button>
                 <button type="button" id="sample-btn">Load sample track</button>
+                <button type="button" id="fill-ele-btn">Fill elevations</button>
                 <button type="button" class="danger" id="clear-btn">Remove track</button>
             </div>
-            <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test. It has no elevations, so the ascent/descent figures, the profile and the debug view's Climb line stay empty with it; use one of your own GPX files for those.</p>
+            <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test. It is not kept when you close the app, unless a hike with it is in progress.</p>
+            <p class="hint">Tracks without elevations (free recordings, GPX files without them, the test loop) get them from a DEM (Digital Elevation Model) when online; the panel says how many points have them and from where. "Fill elevations" retries after being offline.</p>
+
+            <h3>Saved walks</h3>
+            <div id="library"></div>
+            <p class="hint" id="library-empty">None yet. After a recording, tap "Save as track" (in the panel, or below) to keep the walk as a track you can load and follow.</p>
 
             <h3>Export (GPX)</h3>
             <div class="actions">
                 <button type="button" id="export-track-btn">Export track</button>
                 <button type="button" id="export-hike-btn">Export my hike</button>
+                <button type="button" id="save-walk-settings-btn">Save my walk as track</button>
             </div>
             <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it; a free recording, made with no track loaded, has none and says so in the file). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file.</p>
+
+            <h3>Data sources</h3>
+            <p class="hint">The map credits are on the map itself. Elevations (DEM):</p>
+            <ul class="credits" id="dem-credits"></ul>
 
             <h3>This device</h3>
             <dl class="info">
@@ -495,6 +516,19 @@
             <div class="actions">
                 <button type="button" id="resume-no">Start fresh</button>
                 <button type="button" class="primary-action" id="resume-yes" autofocus>Resume</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="keep-dialog">
+        <form method="dialog">
+            <h2>Keep your walk?</h2>
+            <p id="keep-details"></p>
+            <div class="actions">
+                <button type="button" id="keep-export">Export</button>
+                <button type="button" class="primary-action" id="keep-save" autofocus>Save as track</button>
+                <button type="button" class="danger" id="keep-discard">Discard</button>
+                <button type="button" id="keep-cancel">Cancel</button>
             </div>
         </form>
     </dialog>
