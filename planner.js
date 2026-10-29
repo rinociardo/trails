@@ -13,7 +13,7 @@ import {
     steepSegments, planFromWalk, routeLine, midpoint,
 } from './plan.js';
 import { fillElevationsFromDem } from './dem-tiles.js';
-import { routeBetween, ROUTER_NAME, ROUTER_LIMITS, ROUTER_ATTRIBUTION } from './router.js';
+import { routeBetween, routingAvailable, ROUTER_NAME, ROUTER_ATTRIBUTION } from './router.js';
 
 const ELEVATION_DELAY_MS = 250; // after the last change, before asking the DEM
 
@@ -25,12 +25,10 @@ export function slopeText(deg) {
 // What to tell the user when the router can't be used: the segments that needed
 // it are drawn straight instead, so planning carries on.
 const ROUTER_PROBLEMS = {
-    'no-key': `No ${ROUTER_NAME} key: drawn straight. Add your free key in Settings › Planning to follow trails.`,
-    'bad-key': `${ROUTER_NAME} refused the key: drawn straight. Check it in Settings › Planning.`,
-    limit: `${ROUTER_NAME} limit reached (${ROUTER_LIMITS}): drawn straight. Tap a segment's middle circle later to try again.`,
-    offline: `${ROUTER_NAME} not reachable (offline?): drawn straight. Tap a segment's middle circle to try again.`,
-    error: `${ROUTER_NAME} error: drawn straight. Tap a segment's middle circle to try again.`,
+    limit: 'Routing limit reached: drawn straight. Tap a segment\'s middle circle later to try again.',
+    unavailable: 'Trail routing unavailable right now: drawn straight. Tap a segment\'s middle circle to try again.',
 };
+const NOT_SET_UP = 'Trail routing isn\'t set up yet: segments are drawn straight.';
 
 // deps: { view, chart, settings, saveEntry(entry), exportGpx(text, name, title),
 //         toast(text, ms), formatDistance(m), formatMetres(m), formatDateTime(t), onExit() }
@@ -123,11 +121,14 @@ export function createPlanner(deps) {
         // Terrain slope only matters on straight segments: four probes per point.
         const probed = points.map((p, i) => (p.straight ? i : -1)).filter((i) => i >= 0);
         const probes = probed.flatMap((i) => slopeProbes(points[i]));
-        pending = fillElevationsFromDem([...points, ...probes]).catch((err) => {
+        const run = fillElevationsFromDem([...points, ...probes]).catch((err) => {
             console.error('DEM elevations failed:', err);
             return null;
         }).then((dem) => {
-            if (!editor || runRev !== rev) return pending; // a newer change is being computed
+            if (!editor) return null;
+            // Changed meanwhile: answer with the newer run (start it if it is still
+            // waiting for its timer). Returning this run itself would never settle.
+            if (runRev !== rev) return pending !== run ? pending : computeElevations();
             const filled = dem ? dem.points.slice(0, points.length) : points;
             const slopes = new Array(points.length).fill(null);
             if (dem) {
@@ -151,7 +152,8 @@ export function createPlanner(deps) {
             draw();
             return result;
         });
-        return pending;
+        pending = run;
+        return run;
     }
 
     // A user edit: fresh messages, redraw, then trails and elevations.
@@ -184,7 +186,7 @@ export function createPlanner(deps) {
                 const s = editor.unrouted[0];
                 const a = editor.vertices[s], b = editor.vertices[s + 1];
                 draw();
-                const r = await routeBetween(a, b, settings.orsKey);
+                const r = await routeBetween(a, b);
                 if (!editor) break;
                 const t = findSegment(a, b);
                 if (t < 0) continue; // moved meanwhile: the loop routes the new one
@@ -204,9 +206,9 @@ export function createPlanner(deps) {
                 } else {
                     // The router can't be used now: every waiting segment goes straight.
                     for (const u of editor.unrouted) editor.fallBack(u);
-                    notices.push(ROUTER_PROBLEMS[r.reason] ?? ROUTER_PROBLEMS.error);
+                    const note = !routingAvailable() ? NOT_SET_UP : ROUTER_PROBLEMS[r.reason] ?? ROUTER_PROBLEMS.unavailable;
+                    if (!notices.includes(note)) notices.push(note);
                     if (r.detail) console.warn('Router:', r.reason, r.detail);
-                    toast(ROUTER_PROBLEMS[r.reason] ?? ROUTER_PROBLEMS.error, 6000);
                 }
                 rev++;
                 scheduleElevations();
@@ -215,7 +217,7 @@ export function createPlanner(deps) {
             console.error('Routing failed:', err);
             if (editor) {
                 for (const u of editor.unrouted) editor.fallBack(u);
-                notices.push(ROUTER_PROBLEMS.error);
+                if (!notices.includes(ROUTER_PROBLEMS.unavailable)) notices.push(ROUTER_PROBLEMS.unavailable);
                 rev++;
                 scheduleElevations();
             }
@@ -289,10 +291,10 @@ export function createPlanner(deps) {
             entryId = null;
             $('plan-name').value = `Track ${deps.formatDateTime(Date.now())}`;
         }
-        nextType = settings.orsKey ? SEGMENT_TRAIL : SEGMENT_STRAIGHT;
+        nextType = routingAvailable() ? SEGMENT_TRAIL : SEGMENT_STRAIGHT;
         dirty = false;
         result = null;
-        notices = settings.orsKey ? [] : [`Segments are straight: add your free ${ROUTER_NAME} key in Settings › Planning to follow trails.`];
+        notices = routingAvailable() ? [] : [NOT_SET_UP];
         rev++;
         document.body.classList.add('plan-mode');
         view.startPlanEditing(handlers);
@@ -355,7 +357,6 @@ export function createPlanner(deps) {
     $('plan-undo').addEventListener('click', undo);
     $('plan-type').addEventListener('click', () => {
         nextType = nextType === SEGMENT_TRAIL ? SEGMENT_STRAIGHT : SEGMENT_TRAIL;
-        if (nextType === SEGMENT_TRAIL && !settings.orsKey) toast(ROUTER_PROBLEMS['no-key'], 5000);
         draw();
     });
     $('plan-save').addEventListener('click', save);

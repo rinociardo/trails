@@ -51,12 +51,34 @@ wanted eventually.
   (4808): summits come out a little low on a 30 m grid.
 - **Trail routing: openrouteservice, `foot-hiking` profile** (chosen by the user 2026-10-28).
   Only `router.js` talks to it (its address, limits and credit are `ROUTER` in
-  `map-config.js`), so another service can replace it there. The user enters their **own
-  free key** in Settings › Planning (kept in this device's settings in localStorage, which
-  the user's other apps on rinociardo.github.io could read); **a key must never be in the
+  `map-config.js`), so another service can replace it there. **a key must never be in the
   repo**. Free key: 2,000 routes a day, 40 a minute. Attribution "Routes © openrouteservice.org
   by HeiGIT · map data © OpenStreetMap contributors" is always shown in the planner bar and in
   Settings › Data sources.
+- **Routing relay holding the owner's key** (decided by the user 2026-10-28, v0.9.0,
+  replacing the per-user key field of v0.8.0): nobody needs any setup. `relay/worker.js` is
+  a Cloudflare Worker (free plan) that keeps the user's openrouteservice key as a secret
+  (`ORS_KEY`, set with `wrangler secret put`, never in a file) and forwards one
+  `foot-hiking` route between two points. It accepts only `POST /route` with two points
+  ≤ ≈50 km apart, only from `ALLOWED_ORIGINS` (rinociardo.github.io, localhost:8000), at most
+  30 requests a minute per IP (Cloudflare Rate Limiting binding, approximate, per
+  location). Key problems map to quota → 429, refused key → 502. **Every error has a body**
+  (requested 2026-10-29): the relay's own refusals say why (`{"error": "…", "from":
+  "relay"}`); openrouteservice's message is always passed on (`{"error": {code, message},
+  "from": "openrouteservice"}`). **The key is never logged or returned** (replaced by `[key]`
+  if an answer quotes it); errors log only safe facts about it (length, stray spaces, unusual
+  characters) for `wrangler tail`. Spaces around the stored key are ignored. First deploy
+  (2026-10-29, https://trails-relay.rinociardo.workers.dev) answered 400 with an empty body
+  from upstream. Cause (found 2026-10-29 with `wrangler tail`): the stored secret was a
+  single control character, not the key (Ctrl+V in a Linux terminal types a control
+  character; paste with Ctrl+Shift+V).
+  openrouteservice's FAQ explicitly recommends this (a key belongs to one person and must
+  not be used client-side; route requests through your own server). Known limit: the
+  origin check stops other websites, not scripts faking the header; worst case the day's
+  2,000 routes run out. The user deploys it themselves (`relay/README.md`; Wrangler pinned
+  to 4.151.0); `ROUTER.relayUrl` in `map-config.js` is empty until then (segments straight,
+  note "Trail routing isn't set up yet"). Any key saved by v0.8.0 is deleted from settings.
+  **No personal-key screen for now.**
 - No build step: plain HTML/JS/CSS served as-is; ES modules.
 - **Hosting: GitHub Pages**, repo `rinociardo/trails`, URL https://rinociardo.github.io/trails/.
   HTTPS is required for GPS, the service worker and installing. The `rinociardo.github.io`
@@ -86,6 +108,8 @@ wanted eventually.
 - Live numbers: distance, ascent and descent, each done / remaining (`elevation.js`).
 - Totals (distance, ascent, descent) shown as soon as a track is loaded, before starting,
   so trails can be compared while scouting.
+- Elevation labels get the room they need (fixed 2026-10-29, v0.9.0: at a fixed 34 px
+  margin "1300 m" showed as "300 m").
 - Use the **track's** elevation at my snapped position, never GPS altitude (too noisy).
 - Smooth elevations before summing ascent/descent. Chosen: **5 m hysteresis** (a climb or
   drop only counts once it exceeds 5 m), adjustable in Settings to compare with Maps 3D PRO.
@@ -236,7 +260,7 @@ wanted eventually.
   track** opens the planner; **Edit** on a saved entry edits it. Not available while a hike
   is running.
 - Tap/click the map to add a point at the end, joined by a segment of the type shown on the
-  **Next: Trail / Next: Straight** button (starts on Trail when a key is set, otherwise
+  **Next: Trail / Next: Straight** button (starts on Trail when the relay is set up, otherwise
   Straight). Drag a point to move it; tap it to delete it (an inner point's two segments
   become one). Each segment has a small handle in the middle of its line: drag it to insert a
   point, **tap it to switch the segment between trail and straight**. **Undo** button (also Cmd/Ctrl+Z on the
@@ -283,16 +307,21 @@ wanted eventually.
 - A segment being routed is drawn faint. Trail segments are solid, straight ones dashed.
 - **Fallback to straight, with a message** (never breaks planning): no route found (also: no
   path within 350 m of a point); route **more than 3×** the straight distance ("the trail
-  would be 4.2× the straight distance (5.1 km instead of 1.2 km)"); no key; key refused;
-  daily/minute limit reached (429); service unreachable or any other error. In the last four
-  cases every segment waiting for a route goes straight, and a toast also appears. Tapping a
+  would be 4.2× the straight distance (5.1 km instead of 1.2 km)"); limit reached (429:
+  "Routing limit reached: drawn straight."); relay not set up, unreachable or any other
+  error ("Trail routing unavailable right now: drawn straight."). In the last two cases every
+  segment waiting for a route goes straight. Since v0.9.0 these are **short notes only, no
+  toast** (requested 2026-10-28). Tapping a
   segment's middle handle twice (straight → trail) tries again; failures are not remembered.
 - Messages, the steep warning and "Finding trails…" show in a dark box floating over the top
   of the map, which taps pass through: changing them must not resize the map (that shifted
   everything under the finger). Toasts also let taps through (v0.8.0).
 - Tested in a headless browser with openrouteservice answers faked for each case (route,
   detour 21.7×, no route, 429, refused key): all fall back as above; a saved and reopened
-  plan made no new requests. Not yet tested with a real key.
+  plan made no new requests. v0.9.0 re-tested headless with a faked relay (route, limit,
+  unreachable, not configured); the relay itself is unit-tested (`tests/relay.test.js`) and
+  its config checked with `wrangler deploy --dry-run`. Tested with the real relay on 2026-10-29
+  (headless, from localhost:8000, Wengen): segments follow the paths, no errors.
 
 Routing services compared on 2026-10-28 (all four allow calls from a browser, CORS checked):
 - **openrouteservice** (HeiGIT): free key, 2,000 routes/day, 40/min; `foot-hiking` profile.
@@ -337,6 +366,6 @@ per changed segment.
 - Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
   side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `router.js`
-  the routing service.
+  the routing service (through the relay in `relay/`, deployed separately to Cloudflare).
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
   distance walked in that time is missing from the recording.

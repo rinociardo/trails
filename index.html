@@ -536,10 +536,7 @@
             <p class="hint">"New track" plans a route on the map; "Edit" changes a saved one. Editing a recorded walk saves a new track and keeps the recording.</p>
 
             <h3>Planning</h3>
-            <label class="field">openrouteservice key (for following trails)
-                <input type="text" id="set-orskey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
-            </label>
-            <p class="hint">Trail segments follow footpaths using openrouteservice (<code>foot-hiking</code>). Get a free key at <a id="ors-signup" target="_blank" rel="noopener">openrouteservice.org</a> (2,000 routes a day). The key is kept only on this device, never in the app's code. Without it, or when its daily limit is reached, segments are drawn straight.</p>
+            <p class="hint">Trail segments follow footpaths using openrouteservice (<code>foot-hiking</code>), through the Trails relay: nothing to set up. When routing is unavailable (offline) or its daily limit is reached, segments are drawn straight.</p>
             <label class="field">Warn when a straight segment crosses slopes steeper than (degrees)
                 <input type="number" id="set-steep" min="10" max="60" step="1" inputmode="numeric">
             </label>

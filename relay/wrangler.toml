@@ -1,0 +1,21 @@
+# Cloudflare Worker settings for the Trails routing relay (see relay/README.md).
+# No secrets here: the openrouteservice key is stored with `wrangler secret put ORS_KEY`.
+name = "trails-relay"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+# Sites allowed to use the relay (comma-separated). localhost:8000 is for testing
+# the app on the computer; remove it if you prefer.
+ALLOWED_ORIGINS = "https://rinociardo.github.io,http://localhost:8000"
+
+# Per visitor (IP address), per Cloudflare location: 30 routes a minute is far more
+# than planning needs (one per segment), and stops a runaway script quickly.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 60

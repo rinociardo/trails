@@ -59,6 +59,9 @@ export function createProfileChart(root) {
         lo = Math.floor(lo / yStep) * yStep;
         hi = Math.ceil(hi / yStep) * yStep;
 
+        // Room for the widest elevation label ("1300 m" was cut to "300 m" at a fixed 34 px).
+        ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        PAD.left = Math.max(34, Math.ceil(Math.max(...[lo, hi].map((e) => ctx.measureText(`${Math.round(e)} m`).width))) + 8);
         const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
         const x = (d) => PAD.left + (d / track.total) * plotW;
         const y = (e) => PAD.top + (1 - (e - lo) / (hi - lo)) * plotH;

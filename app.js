@@ -7,7 +7,7 @@ import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
 import { createPlanner } from './planner.js';
-import { ROUTER_ATTRIBUTION, ROUTER_SIGNUP_URL } from './router.js';
+import { ROUTER_ATTRIBUTION } from './router.js';
 
 // Developer switches: ?sim (or ?sim=N for N× walking speed, default 10) replays
 // the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
@@ -35,7 +35,6 @@ const DEFAULT_SETTINGS = {
     stopClimbM: DEFAULT_TRACKING.stopClimbM,
     eleThresholdM: DEFAULT_ELEVATION_THRESHOLD_M,
     steepSlopeDeg: 20,      // planner: warn when a straight segment crosses steeper terrain (≈36%)
-    orsKey: '',             // the user's own openrouteservice key (never in the code)
     debug: false,
     simulate: false,
     panelOpen: true,
@@ -53,6 +52,8 @@ function loadSettings() {
             if (stored.steepSlopeDeg === 30) delete stored.steepSlopeDeg;
             stored.steepDefault20 = true;
         }
+        // v0.9.0 routes through the Trails relay: forget any personal key entered in v0.8.0.
+        delete stored.orsKey;
         return { ...DEFAULT_SETTINGS, ...stored };
     } catch {
         return { ...DEFAULT_SETTINGS };
@@ -1060,7 +1061,6 @@ $('settings-btn').addEventListener('click', () => {
     $('set-offtrack').value = settings.offTrackM;
     $('set-offtrack-straight').value = settings.offTrackStraightM;
     $('set-steep').value = settings.steepSlopeDeg;
-    $('set-orskey').value = settings.orsKey;
     $('set-sound').checked = settings.sound;
     $('set-autodim').value = String(settings.autoDimS);
     $('set-maxacc').value = settings.maxAccuracyM;
@@ -1103,13 +1103,6 @@ bindNumberSetting('set-stopclimb', 'stopClimbM', applyTracking);
 bindNumberSetting('set-offtrack-straight', 'offTrackStraightM');
 bindNumberSetting('set-steep', 'steepSlopeDeg', () => planner.refresh());
 
-$('set-orskey').addEventListener('change', (e) => {
-    settings.orsKey = e.target.value.trim();
-    e.target.value = settings.orsKey;
-    saveSettings();
-    toast(settings.orsKey ? 'Key saved on this device: new planned segments follow trails.' : 'Key removed: planned segments will be straight.');
-});
-$('ors-signup').href = ROUTER_SIGNUP_URL;
 $('router-credit').textContent = ROUTER_ATTRIBUTION;
 bindNumberSetting('set-elethreshold', 'eleThresholdM', () => {
     if (!track) return;

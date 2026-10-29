@@ -43,13 +43,13 @@ export const DEM = {
 };
 
 // Trail routing for the planner (decided 2026-10-28): openrouteservice, foot-hiking
-// profile. Each user enters their own free key in Settings (never in this code).
-// Free key: 2,000 routes a day, 40 a minute. Attribution required.
+// profile, through the Trails relay (relay/ in the repo, a Cloudflare Worker that
+// holds the owner's key as a secret: no key in this code, no setup for users).
+// With relayUrl empty (relay not deployed) segments are drawn straight.
+// The key's limits: 2,000 routes a day, 40 a minute, shared by everyone. Attribution required.
 export const ROUTER = {
     name: 'openrouteservice',
-    url: 'https://api.openrouteservice.org/v2/directions/foot-hiking/geojson',
-    signupUrl: 'https://openrouteservice.org/dev/#/signup',
-    limits: '2,000 routes a day, 40 a minute',
+    relayUrl: 'https://trails-relay.rinociardo.workers.dev/route',
     attribution: 'Routes © openrouteservice.org by HeiGIT · map data © OpenStreetMap contributors',
 };
 
