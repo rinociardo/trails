@@ -1,0 +1,266 @@
+{
+ "_about": "Invented answers in the shape of the real place search and router, for tests. Nothing here was searched for, so no test uses quota.",
+ "geocode": {
+  "812 Tansy Street, West Larkmere, QX": {
+   "geocoding": {
+    "version": "0.2",
+    "query": {
+     "size": 8
+    }
+   },
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -140.0,
+       10.0
+      ]
+     },
+     "properties": {
+      "layer": "street",
+      "label": "Tansy Street, Larkmere, QX, Nowhere",
+      "name": "Tansy Street"
+     },
+     "bbox": null
+    }
+   ]
+  },
+  "Ottermere Marina": {
+   "geocoding": {
+    "version": "0.2",
+    "query": {
+     "size": 8
+    }
+   },
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       3.0,
+       52.0
+      ]
+     },
+     "properties": {
+      "layer": "venue",
+      "label": "Ottermere Marina, Faraway, ZZ, Elsewhere",
+      "name": "Ottermere Marina"
+     },
+     "bbox": null
+    },
+    {
+     "type": "Feature",
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -140.0,
+       10.0427
+      ]
+     },
+     "properties": {
+      "layer": "venue",
+      "label": "Ottermere Marina, Dunmarrow, QX, Nowhere",
+      "name": "Ottermere Marina"
+     },
+     "bbox": null
+    }
+   ]
+  },
+  "Thistledown Park": {
+   "geocoding": {
+    "version": "0.2",
+    "query": {
+     "size": 8
+    }
+   },
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -140.0,
+       10.06
+      ]
+     },
+     "properties": {
+      "layer": "street",
+      "label": "Thistledown Street, Dunmarrow, QX, Nowhere",
+      "name": "Thistledown Street"
+     },
+     "bbox": null
+    }
+   ]
+  },
+  "Thistledown Park, QX": {
+   "geocoding": {
+    "version": "0.2",
+    "query": {
+     "size": 8
+    }
+   },
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -140.0,
+       10.08785
+      ]
+     },
+     "properties": {
+      "layer": "venue",
+      "label": "Thistledown Park, Dunmarrow, QX, Nowhere",
+      "name": "Thistledown Park"
+     },
+     "bbox": null
+    }
+   ]
+  },
+  "Merrowgate Green, Dunmarrow": {
+   "geocoding": {
+    "version": "0.2",
+    "query": {
+     "size": 8
+    }
+   },
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -140.0,
+       10.12693
+      ]
+     },
+     "properties": {
+      "layer": "venue",
+      "label": "Merrowgate Green, Dunmarrow, QX, Nowhere",
+      "name": "Merrowgate Green"
+     },
+     "bbox": null
+    }
+   ]
+  }
+ },
+ "routes": [
+  {
+   "from": [
+    10.0,
+    -140.0
+   ],
+   "to": [
+    10.0427,
+    -140.0
+   ],
+   "response": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -140.0003,
+         10.0
+        ],
+        [
+         -140.0003,
+         10.02
+        ],
+        [
+         -140.0003,
+         10.0427
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "from": [
+    10.0427,
+    -140.0
+   ],
+   "to": [
+    10.08785,
+    -140.0
+   ],
+   "response": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -140.0003,
+         10.0427
+        ],
+        [
+         -140.0003,
+         10.065
+        ],
+        [
+         -140.0003,
+         10.08785
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "from": [
+    10.08785,
+    -140.0
+   ],
+   "to": [
+    10.12693,
+    -140.0
+   ],
+   "response": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -140.0003,
+         10.08785
+        ],
+        [
+         -140.01488,
+         10.107389999999999
+        ],
+        [
+         -140.0003,
+         10.12693
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

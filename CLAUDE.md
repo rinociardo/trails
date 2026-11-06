@@ -370,7 +370,8 @@ lists in `data-tabs` where it shows:
   coverage planned), trip panel with the loaded track's totals/profile. Trail scan: to do
   (see below).
 - **Plan**: a start card: **Draw a new track**, **Edit the loaded track** (like a recorded
-  walk: simplified, saved as a new track), From → To and Loop generator (greyed, "planned").
+  walk: simplified, saved as a new track), **Import a trail guide** (v0.11.0), From → To and Loop
+  generator (greyed, "planned").
   Then the planner as before (name bar, Undo / Next / Save / Export / Done, totals/profile).
   Not while hiking. Leaving the tab with unsaved changes asks first (Cancel stays).
 - **Go**: the hike screen: Start/Stop, Center, Dim, top numbers, trip table, profile,
@@ -399,6 +400,56 @@ lists in `data-tabs` where it shows:
   converts on import); the file's `<desc>` gives the totals in the chosen units ("Distance
   4.54 mi, ascent 739 ft, descent 731 ft"; a hike: walked distance and moving time).
 - Slopes stay in degrees and %.
+
+### Trail-guide importer (built in v0.11.0, requested 2026-11-06; awaiting iPhone testing)
+Plan › **Import a trail guide** (`guide.js` pure logic, `guide-import.js` screen). For a club's
+milestone sheet: one line per milestone, "mileage  description", `*` after the mileage = restrooms.
+- **Input**: pasted text, or a file. Lines not starting with a mileage are ignored (listed,
+  collapsed). The longest run of mileages that never goes down is kept, so a stray "30 hikers…"
+  can't throw out the real lines. **A line with a phone number or email is never a milestone**, and
+  only place names go to the search, never the sheet.
+- **CSV**: columns `mile, place, note, restroom` (a header names them, any order; no header = that
+  order). A place is searched as written; no place = a waypoint.
+- **Places**: names are found in each line: addresses, then spots (Trailhead, Marina, Park…) in the
+  line's first sentence. Not route points by default: direction words; names after to / past /
+  until / **under** ("go under the bridge": the search finds the road on top, often across the
+  canal); long things (Trail, Canal, Street) and road codes; the same place twice in a row.
+- **Matching** (decided 2026-11-06 after real results): a result counts only if it **has the name
+  searched for** and is **possible for the sheet's distance** from the place before (≤ sheet × 1.25 +
+  1.5 km). If not, the name is retried with each state the sheet mentions (at most 1 + states
+  searches per row; answers cached while the app is open). Otherwise no pin: "No match near the
+  route", and rows below aren't affected. Correcting a row rechecks the ones below it (no searches).
+- **Confirm / Change / Skip** per row, with numbered pins on the map. Change: search other text,
+  pick from the results, or **tap the map**; dragging a pin also places it. Unnamed turns can be
+  made places. Only confirmed places are routed.
+- **Route**: `foot-hiking` between confirmed places, one leg at a time. A place is moved to where the
+  route meets the trails, so an address off the path adds no spur. No detour limit here (unlike the
+  planner): a long detour is shown and flagged. No route or relay down: straight leg, with a note.
+- **Leg comparison**: table of sheet vs route per leg and in total; **more than 10% off is flagged**
+  (red in the table, orange on the map). Not saved with the track.
+- **Waypoints**: every milestone. A place is at its route point. A turn is placed by mileage **scaled
+  to its leg**, so a leg routed 3% long doesn't shift its turns past the next place. Stored by
+  lat/lon; distance along is worked out on load, so it holds after Reverse, GPX import and edits.
+  Restrooms have an icon; tap a marker for its note. Editing the route in the planner keeps
+  waypoints where they were (they aren't re-placed, and legs aren't re-compared).
+- **Hike**: Go shows "In 0.82 mi" and the next waypoint's note (2 lines, tap for all), also on the
+  dim screen. A waypoint within 15 m counts as reached.
+- **GPX**: `<wpt>` before the track: name, `<desc>` the note, `<cmt>Sheet mile N</cmt>`, `<sym>`
+  Restroom/Waypoint. Import reads them back. The Track Library keeps `waypoints` per entry.
+- **Tested** 2026-11-06 with a real club sheet, through the real relay and router: about 4% over its
+  total, every leg within 10%, once wrong-bank pins were gone. Some of its places were not in the search
+  data, so they stayed waypoints or were placed by hand. The sheet and its results stay out of the repo.
+- **Test sheet and recordings** (decided 2026-11-06): **nothing from a real guide goes in the repo**, not
+  its wording, places or mileages; `.gitignore` blocks `*.docx`. `tests/fixtures/guide-milestones.txt` is
+  an invented sheet. `tests/fixtures/guide-recorded-responses.json` holds invented answers in the
+  real format, because a recording of real searches would bring real names back.
+- **Tests use recorded answers by default** (decided 2026-11-06): `tests/helpers/recorded.js` replaces
+  `fetch` and refuses anything else, so a test can't use quota; browser test scripts use its
+  `useRecordedResponsesInBrowser(context)`. **The real relay only on the user's explicit request.**
+- **Search quota**: a sheet takes 10–25 searches, answers are cached while the app is open
+  (`cachedSearch`). Testing against the real service used about 130 in one evening, then openrouteservice
+  answered 429 "Quota exceeded", still refused 2.5 minutes later (so not a per-minute limit; routing kept
+  working). The limit isn't published: see the key's dashboard.
 
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
@@ -439,12 +490,13 @@ lists in `data-tabs` where it shows:
 
 ## Developer notes
 
-- Run locally: `python3 -m http.server 8000`; tests: `npm test`.
+- Run locally: `python3 -m http.server 8000`; tests: `npm test` (no network: recorded answers, see the
+  trail-guide importer).
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
-  side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `router.js`
+  side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `guide-import.js` the trail-guide importer; `router.js`
   the routing service and `geocoder.js` the place search (both through the relay in `relay/`,
   deployed separately to Cloudflare: redeploy it after changing `relay/`).
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so

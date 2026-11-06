@@ -48,6 +48,7 @@ export function createPlanner(deps) {
     let nextType = SEGMENT_STRAIGHT; // type of the segment the next tap adds
     let notices = [];        // routing messages since the last edit
     let routing = false;     // a routing loop is running
+    let waypoints = [];      // of the entry being edited (trail guides): kept as they are
 
     const upToDate = () => result && result.rev === rev;
 
@@ -275,6 +276,7 @@ export function createPlanner(deps) {
     // "trail" segments that keep the walked path (no routing needed) and saved
     // as a new entry, so the recording itself is kept.
     function open(entry = null) {
+        waypoints = entry?.waypoints ?? [];
         if (entry?.plan) {
             // Plans saved before routing existed have no routes: keep their
             // trail segments as drawn rather than routing them all at once.
@@ -319,6 +321,7 @@ export function createPlanner(deps) {
                 points: r.points.map(({ lat, lon, ele, straight }) => ({ lat, lon, ele, straight })),
                 eleInfo: { own: 0, dem: r.filled, missing: r.missing, status: r.missing ? 'failed' : 'ok' },
                 plan: editor.snapshot(),
+                waypoints,
                 savedAt: Date.now(),
             };
             await deps.saveEntry(entry);
@@ -343,7 +346,7 @@ export function createPlanner(deps) {
         }
         const name = $('plan-name').value.trim() || 'Planned track';
         const desc = deps.describe?.(result.track, result.profile) ?? '';
-        deps.exportGpx(buildGpx({ name, desc, segments: [result.points] }), gpxFileName(name), name);
+        deps.exportGpx(buildGpx({ name, desc, segments: [result.points], waypoints }), gpxFileName(name), name);
     }
 
     // Resolves false (and stays open) if there are unsaved changes the user keeps.

@@ -167,11 +167,13 @@ function planGeoJson({ vertices, segments, lines, mids, steep, pending }) {
             properties: { kind: 'segment', type, steep: steep.has(i), pending: pending.has(i), index: i },
             geometry: { type: 'LineString', coordinates: lines[i].map(coord) },
         });
-        features.push({
-            type: 'Feature',
-            properties: { kind: 'mid', index: i },
-            geometry: { type: 'Point', coordinates: coord(mids[i]) },
-        });
+        if (mids[i]) {
+            features.push({
+                type: 'Feature',
+                properties: { kind: 'mid', index: i },
+                geometry: { type: 'Point', coordinates: coord(mids[i]) },
+            });
+        }
     });
     vertices.forEach((v, i) => {
         const role = i === 0 ? 'start' : i === vertices.length - 1 ? 'end' : 'middle';
@@ -312,6 +314,11 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
     // Pin for a place found by search (MapLibre's default marker, in the brand colour).
     const placePin = new maplibregl.Marker({ color: '#2b4c3f' });
 
+    // A track's waypoints, and the trail-guide importer's numbered pins.
+    let waypointMarkers = [];
+    let guidePins = [];
+    const removeAll = (markers) => markers.forEach((m) => m.remove());
+
     function keepInView(fix) {
         const pt = map.project([fix.lon, fix.lat]);
         const { clientWidth: w, clientHeight: h } = map.getContainer();
@@ -381,10 +388,57 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
             placePin.remove();
         },
 
-        fitTrack(points) {
+        // padding: pixels, or { top, bottom, left, right } to keep clear of a panel.
+        fitTrack(points, padding = 40) {
             const bounds = new maplibregl.LngLatBounds();
             for (const p of points) bounds.extend([p.lon, p.lat]);
-            map.fitBounds(bounds, { padding: 40, maxZoom: 16, duration: 0 });
+            map.fitBounds(bounds, { padding, maxZoom: 16, duration: 0 });
+        },
+
+        // [{ lat, lon, restroom, title, note }]: a marker per waypoint; tap for its note.
+        setWaypoints(waypoints) {
+            removeAll(waypointMarkers);
+            waypointMarkers = (waypoints ?? []).map((w) => {
+                const element = document.createElement('div');
+                element.className = w.restroom ? 'waypoint-marker restroom' : 'waypoint-marker';
+                if (w.restroom) element.innerHTML = '<svg aria-hidden="true"><use href="#icon-restroom"/></svg>';
+                const content = document.createElement('div');
+                const title = document.createElement('b');
+                title.textContent = w.title;
+                const note = document.createElement('div');
+                note.textContent = w.note ?? '';
+                content.append(title, note);
+                const popup = new maplibregl.Popup({ offset: 12, maxWidth: '260px' }).setDOMContent(content);
+                return new maplibregl.Marker({ element }).setLngLat([w.lon, w.lat]).setPopup(popup).addTo(map);
+            });
+        },
+
+        // Trail-guide importer: [{ lat, lon, label, status, active }] as numbered pins.
+        // onTap(i) when one is tapped, onDrag(i, { lat, lon }) when one is moved.
+        setGuidePins(pins, { onTap, onDrag } = {}) {
+            removeAll(guidePins);
+            guidePins = pins.map((pin, i) => {
+                const element = document.createElement('button');
+                element.type = 'button';
+                element.className = `guide-pin ${pin.status}${pin.active ? ' active' : ''}`;
+                element.textContent = pin.label;
+                element.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    onTap?.(i);
+                });
+                const marker = new maplibregl.Marker({ element, draggable: true }).setLngLat([pin.lon, pin.lat]).addTo(map);
+                marker.on('dragend', () => onDrag?.(i, toPoint(marker.getLngLat())));
+                return marker;
+            });
+        },
+
+        // The next tap on the map, once (the importer's "tap the map" for a place).
+        pickPoint(callback) {
+            map.getCanvas().style.cursor = 'crosshair';
+            map.once('click', (e) => {
+                map.getCanvas().style.cursor = '';
+                callback(toPoint(e.lngLat));
+            });
         },
 
         showPosition(fix, { offTrack = false } = {}) {

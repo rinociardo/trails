@@ -7,3 +7,6 @@ node_modules/
 
 # Cloudflare Wrangler working files (relay/)
 .wrangler/
+
+# Club documents can hold contact details: they never go in the repo. Tests use a cleaned copy.
+*.[dD][oO][cC][xX]

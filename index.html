@@ -350,6 +350,87 @@
         #plan-start button:disabled { opacity: .5; }
         #plan-start .primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
         #layers-panel { bottom: calc(var(--bottom-h, 120px) + var(--panel-h, 0px) + 8px); }
+        /* ---- Next waypoint on the hike screen ---- */
+        #next-waypoint {
+            position: fixed;
+            top: calc(var(--stats-h, 0px) + 8px);
+            left: 8px; right: 8px;
+            z-index: 950; /* the off-track banner stays on top */
+            padding: 7px 10px; border: 0; border-radius: 8px;
+            background: rgba(0,0,0,.8); color: #f1f3f5;
+            font-size: 14px; line-height: 1.3; text-align: left;
+        }
+        #next-waypoint b { color: #fff; font-size: 15px; font-variant-numeric: tabular-nums; }
+        #next-waypoint .note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+        #next-waypoint.open .note { display: block; }
+        .restroom-icon { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; fill: currentColor; }
+        .waypoint-marker {
+            width: 12px; height: 12px; border-radius: 50%;
+            background: #fff; border: 2.5px solid #1d4ed8; cursor: pointer;
+        }
+        .waypoint-marker.restroom {
+            width: 24px; height: 24px; display: grid; place-items: center;
+            background: #0b7285; border: 2px solid #fff; color: #fff;
+        }
+        .waypoint-marker svg { width: 16px; height: 16px; fill: currentColor; }
+        .maplibregl-popup-content { font-size: 13px; line-height: 1.35; color: #1b1f1d; }
+        /* ---- Trail-guide importer: under the map, so pins can be checked and moved ---- */
+        body:not(.guide-mode) .guide-only, body.guide-mode #plan-start, body.guide-mode #trip-panel { display: none !important; }
+        #guide-panel {
+            position: fixed;
+            left: 0; right: 0; bottom: var(--bottom-h, 60px);
+            z-index: 1050;
+            max-height: 58%;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 10px 12px 0;
+            background: var(--panel); color: var(--panel-text);
+            border-top: 1px solid var(--panel-border);
+            box-shadow: 0 -4px 16px rgba(0,0,0,.2);
+        }
+        #guide-panel h3 { margin: 0 0 4px; font-size: 15px; }
+        #guide-panel .hint { margin: 6px 0; }
+        #guide-panel textarea, #guide-panel input[type="text"], #guide-panel input[type="search"] {
+            width: 100%; box-sizing: border-box;
+            font: inherit; font-size: 16px; /* 16px or more: iPhone doesn't zoom into the field */
+            padding: 7px 9px; border-radius: 8px;
+            border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text);
+        }
+        .guide-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
+        .guide-sticky { position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--panel-border); }
+        .guide-actions button, .guide-actions .button, .guide-row-actions button, .guide-change button {
+            flex: 1 1 auto; padding: 9px 10px; border-radius: 8px; text-align: center;
+            border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text);
+            font: inherit; font-size: 14px; font-weight: 600;
+        }
+        .guide-actions button:disabled { opacity: .5; }
+        .guide-actions .primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+        .guide-summary { margin: 6px 0; font-size: 14px; font-weight: 600; }
+        .guide-row { padding: 7px 0; border-top: 1px solid var(--panel-border); font-size: 13px; line-height: 1.3; }
+        .guide-row.active { background: rgba(112,72,232,.08); }
+        .guide-row .mile { font-weight: 700; font-variant-numeric: tabular-nums; }
+        .guide-row.turn { color: var(--panel-muted); }
+        .guide-row .match { margin-top: 3px; font-weight: 600; }
+        .guide-row .match.bad { color: var(--danger); }
+        .guide-row-actions { display: flex; gap: 6px; margin-top: 5px; }
+        .guide-row-actions button { padding: 6px 8px; font-size: 13px; }
+        .guide-row-actions .chosen { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+        .guide-change { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
+        .guide-change button { text-align: left; font-weight: 400; }
+        .guide-change small { display: block; color: var(--panel-muted); }
+        .guide-pin {
+            min-width: 24px; height: 24px; padding: 0 4px; border-radius: 12px;
+            border: 2px solid #fff; background: #868e96; color: #fff;
+            font-size: 12px; font-weight: 700; box-shadow: 0 1px 4px rgba(0,0,0,.4); cursor: grab;
+        }
+        .guide-pin.confirmed { background: #2e7d32; }
+        .guide-pin.suggested { background: #7048e8; }
+        .guide-pin.active { outline: 3px solid #f76707; }
+        .guide-legs { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+        .guide-legs th, .guide-legs td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--panel-border); }
+        .guide-legs th:first-child, .guide-legs td:first-child { text-align: left; }
+        .guide-legs tr.flagged td { color: var(--danger); font-weight: 700; }
+        .plan-warn { margin: 6px 0; font-size: 13px; color: var(--danger); font-weight: 600; }
         /* ---- Track Library and Settings: pages over the map ---- */
         .page {
             position: fixed;
@@ -397,6 +478,8 @@
         #dim-overlay.off-track { color: #ff5a4a; }
         #dim-hint { font-size: 13px; color: #444; margin-top: 24px; }
 
+        #dim-next { max-width: 90%; margin-top: 16px; font-size: 17px; line-height: 1.35; text-align: center; }
+
         /* ---- Settings dialog ---- */
         dialog {
             width: min(420px, calc(100% - 24px));
@@ -437,6 +520,7 @@
     </style>
 </head>
 <body data-tab="explore">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="icon-restroom" viewBox="0 0 24 24"><circle cx="7" cy="4.5" r="2.2"/><path d="M4 8.5h6l1 7H9.2V22H5.8v-6.5H3z"/><circle cx="17" cy="4.5" r="2.2"/><path d="M14 8.5h6v7h-1.3V22h-3.4v-6.5H14z"/></symbol></svg>
     <div id="map"></div>
 
     <!-- Top bar: its content depends on the tab (data-tabs lists where each part shows). -->
@@ -483,10 +567,51 @@
     <div id="plan-start" class="card plan-hide" data-tabs="plan">
         <button type="button" class="primary-action" id="new-track-btn">Draw a new track</button>
         <button type="button" id="edit-loaded-btn">Edit the loaded track</button>
+        <button type="button" id="guide-btn">Import a trail guide</button>
         <button type="button" disabled>From → To <small>(planned)</small></button>
         <button type="button" disabled>Loop generator <small>(planned)</small></button>
         <p class="hint" id="plan-start-hint">To change a saved track: Track Library › Edit. Editing a recorded walk or a GPX saves a new track and keeps the original.</p>
     </div>
+
+    <!-- Plan: trail-guide importer (guide-import.js). The map stays visible above it. -->
+    <section id="guide-panel" class="guide-only" data-tabs="plan" aria-label="Import a trail guide">
+        <div id="guide-step-sheet">
+            <h3>Import a trail guide</h3>
+            <p class="hint">Paste the sheet: one line per milestone, "mileage  description", with * after the mileage for restrooms. Other lines are ignored. Only place names are sent to the search, never the rest of the sheet.</p>
+            <textarea id="guide-text" rows="7" spellcheck="false" aria-label="Milestone sheet" placeholder="0.0  Set off from Grove Park&#10;1.40  Fork right at the pump house&#10;3.25*  Stop at Oak Marina"></textarea>
+            <div class="guide-actions">
+                <button type="button" class="primary-action" id="guide-read">Read the sheet</button>
+                <label class="button" for="guide-file">Open CSV or text file</label>
+                <input type="file" id="guide-file" accept=".csv,.txt,text/csv,text/plain" hidden>
+                <button type="button" id="guide-cancel">Cancel</button>
+            </div>
+            <p class="hint">CSV columns: mile, place, note, restroom (a header line names them). A place is searched as written; a row with no place is a waypoint.</p>
+        </div>
+        <div id="guide-step-places" hidden>
+            <input type="text" id="guide-name" aria-label="Track name" placeholder="Track name" autocomplete="off">
+            <p class="guide-summary" id="guide-summary"></p>
+            <div id="guide-list"></div>
+            <details id="guide-ignored-box" hidden><summary id="guide-ignored-title"></summary><ul id="guide-ignored"></ul></details>
+            <p class="hint" id="guide-credit"></p>
+            <div class="guide-actions guide-sticky">
+                <button type="button" class="primary-action" id="guide-route">Route confirmed places</button>
+                <button type="button" id="guide-back-sheet">Back</button>
+            </div>
+        </div>
+        <div id="guide-step-result" hidden>
+            <p class="guide-summary" id="guide-total"></p>
+            <p class="plan-warn" id="guide-notice" hidden></p>
+            <table class="guide-legs" id="guide-legs"></table>
+            <p class="hint" id="guide-waypoints"></p>
+            <p class="hint" id="guide-route-credit"></p>
+            <div class="guide-actions guide-sticky">
+                <button type="button" class="primary-action" id="guide-save">Save to Track Library</button>
+                <button type="button" id="guide-export">Export GPX</button>
+                <button type="button" id="guide-back-places">Change places</button>
+                <button type="button" id="guide-done">Done</button>
+            </div>
+        </div>
+    </section>
 
     <div id="plan-messages" class="plan-only" data-tabs="plan">
         <div class="plan-notice" id="plan-notice" hidden></div>
@@ -499,6 +624,9 @@
         <label class="field">OpenStreetMap (standard) <input type="radio" name="basemap" checked></label>
         <p class="hint">Planned: a topographic map, a hiking-trail overlay and mobile coverage. The map needs a connection (offline maps come with Stage 3).</p>
     </div>
+
+    <!-- Go: the next waypoint of the track (trail guides). Tap for the whole note. -->
+    <button type="button" id="next-waypoint" data-tabs="go" hidden></button>
 
     <section id="trip-panel" aria-label="Trip" data-tabs="explore plan go">
         <button type="button" id="trip-toggle" aria-expanded="true">
@@ -712,6 +840,7 @@
         <div class="free-only"><div class="dim-value" id="dim-moving">–</div><div class="dim-label">Moving</div></div>
         <div class="free-only"><div class="dim-value" id="dim-speed">–</div><div class="dim-label">Avg speed</div></div>
         <div class="dim-label" id="dim-motion"></div>
+        <div id="dim-next" hidden></div>
         <div id="dim-hint">Tap anywhere to show the map</div>
     </div>
 

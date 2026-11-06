@@ -13,6 +13,8 @@ Live site (once published): https://rinociardo.github.io/trails/
 |---|---|
 | `index.html` | Page layout, styles, Apple Home Screen tags |
 | `app.js` | Tabs (Explore, Plan, Go, Track Library, Settings), hike logic: GPX import, GPS, progress, off-track alerts, Wake Lock, dim mode, settings, updates |
+| `guide.js` | Trail-guide importer logic: reads milestone sheets and CSV, finds place names, compares legs, places waypoints (unit-tested) |
+| `guide-import.js` | Trail-guide importer screen (Plan) |
 | `units.js` | km/m or mi/ft for everything shown (unit-tested); values stay in metres inside |
 | `geocoder.js` | Place search (openrouteservice geocoding through the relay); the only file that talks to the search service |
 | `geo.js` | Distance maths and "where am I on the track" (unit-tested in `tests/`) |
@@ -143,6 +145,13 @@ The steps are in the order you should run them.
    **With a test hike:** create the loop again and press Go › Start (simulated is fine). After a few seconds, Track Library › **Remove test loop**. *Expect:* if a walk was recorded, **Keep your walk?** with Export / Save as track / Discard / Cancel (if not, a plain confirmation). Cancel: nothing changes and the hike keeps running. Tap Remove again › **Discard**: the hike stops and the loop is gone. Force-close and reopen: no track, no prompt, Current recording says "Nothing recorded".
    **After a force-close:** create the loop, Start, walk or simulate a little, force-close, reopen. *Expect:* the Resume prompt. **Start fresh** › Discard: the loop is gone at once, and stays gone on reopening.
    **Library copy:** create the loop, Add to library. *Expect:* its row says "loaded". Delete it and confirm: the row and the loaded loop both go.
+25. **Trail-guide importer (v0.11.0).** Each read of a sheet uses 10–25 place searches of the shared quota. Plan › **Import a trail guide**, paste your club's sheet (the whole page is fine) › **Read the sheet**.
+   *Expect:* a track name from the sheet, the count of milestones, "N other lines ignored" (open it: any contact paragraph is only listed there), numbered pins. Names you go *under*, *past* or *to* are turns, not places. A place not found says "No match near the route".
+   **Confirm** the right ones. On a wrong or missing one: **Change** › search other text, pick a result, or **Tap the map**; dragging a pin works too. **Skip** leaves it as a waypoint. Correcting a place can bring back rows below it.
+   **Route confirmed places.** *Expect:* the line follows the trails, and a table of sheet vs route for each leg. To see a flag: confirm a place on the wrong side of a river (more than 10% off: red in the table, orange on the map). **Change places** goes back; **Save to Track Library** keeps it; **Export GPX** shares it.
+   **CSV:** make a file with the header `mile,place,note,restroom`, one row per milestone (no place = a waypoint; restroom `yes`). "Open CSV or text file". *Expect:* the same list, searching each place as written.
+26. **Follow a trail guide.** Track Library › Load it (the row says how many waypoints), then Go. *Expect:* markers along the line, with a restroom icon at restroom milestones; tap one for its note. A dark box says e.g. "In 0.8 mi" and the next note (tap it for a long note). Start (Simulated GPS is fine): the distance counts down and the note moves on as you pass each one. **Dim** shows it too. **Reverse direction**: the notes come from the other end. Force-close and reopen: all still there.
+   **Between devices:** Export GPX on the computer, AirDrop to the iPhone, Track Library › Import GPX. *Expect:* the same total, waypoints, notes and restrooms.
 
 ### If Wake Lock fails
 

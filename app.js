@@ -7,6 +7,8 @@ import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
 import { createPlanner } from './planner.js';
+import { createGuideImport } from './guide-import.js';
+import { locateWaypoints, nextWaypoint } from './guide.js';
 import { ROUTER_ATTRIBUTION } from './router.js';
 import { searchPlaces, searchAvailable, GEOCODER_ATTRIBUTION } from './geocoder.js';
 import { makeUnits, defaultUnitSystem } from './units.js';
@@ -220,9 +222,28 @@ const planner = createPlanner({
     },
 });
 
+const guideImport = createGuideImport({
+    view,
+    saveEntry: saveLibraryEntry,
+    exportGpx,
+    toast,
+    settings,
+    formatDistance,
+    formatDateTime,
+    describe: totalsText,
+    onChange() {
+        document.body.classList.toggle('guide-mode', guideImport.active);
+        updateChrome();
+    },
+    // Back to the loaded track's waypoints.
+    onExit() {
+        renderWaypoints();
+    },
+});
+
 // ---------- State ----------
 
-// { name, points, cum, total, profile, eleInfo, temporary }: profile is null without
+// { name, points, cum, total, profile, eleInfo, temporary, waypoints }: profile is null without
 // elevations; eleInfo counts where they came from (see elevationText); temporary
 // marks the test loop, which is not brought back on reopening.
 let track = null;
@@ -280,8 +301,48 @@ function renderStats() {
     $('alert-banner').hidden = !hike.offTrack;
     if (hike.offTrack) setText($('alert-distance'), `${offsetText} from route`);
 
+    renderNextWaypoint();
     renderTrip();
 }
+
+// The track's waypoints as markers on the map.
+function renderWaypoints() {
+    view.setWaypoints((track?.waypoints ?? []).map((w) => ({
+        ...w,
+        title: `${w.name || (Number.isFinite(w.mile) ? `Mile ${w.mile}` : 'Waypoint')}${w.restroom ? ' · restrooms' : ''}`,
+    })));
+}
+
+// "In 0.25 mi: Turn left…", on the hike screen and the dim screen. Only redrawn when
+// its text changes, so a GPS fix costs next to nothing.
+function renderNextWaypoint() {
+    const box = $('next-waypoint'), dim = $('dim-next');
+    const next = track ? nextWaypoint(track.waypoints, hike.progress?.along ?? 0) : null;
+    const showing = Boolean(next) && !planner.active;
+    box.hidden = !showing;
+    dim.hidden = !showing;
+    if (!showing) {
+        box.dataset.text = '';
+        return;
+    }
+    const { waypoint: w, distance } = next;
+    const note = w.note || w.name || 'Waypoint';
+    const distanceText = `In ${formatDistance(distance)}`;
+    const key = `${distanceText}|${note}|${w.restroom}`;
+    if (box.dataset.text === key) return;
+    box.dataset.text = key;
+    const parts = [Object.assign(document.createElement('b'), { textContent: `${distanceText}${w.restroom ? ' · restrooms ' : ''}` })];
+    if (w.restroom) {
+        const icon = document.createElement('span');
+        icon.innerHTML = '<svg class="restroom-icon" aria-hidden="true"><use href="#icon-restroom"/></svg>';
+        parts.push(icon);
+    }
+    parts.push(Object.assign(document.createElement('div'), { className: 'note', textContent: note }));
+    box.replaceChildren(...parts);
+    setText(dim, `${distanceText}: ${note}`);
+}
+
+$('next-waypoint').addEventListener('click', () => $('next-waypoint').classList.toggle('open'));
 
 // Done / remaining / total table and the profile marker. Totals show as soon
 // as a track is loaded, so trails can be compared before starting.
@@ -564,9 +625,11 @@ function restoreRecording(saved) {
 
 // eleInfo: pass the saved one when restoring; otherwise elevations in the file
 // count as "own" and missing ones are fetched from the DEM.
-async function setTrack(name, points, { save = true, eleInfo = null, temporary = false } = {}) {
+async function setTrack(name, points, { save = true, eleInfo = null, temporary = false, waypoints = [] } = {}) {
     const own = points.filter((p) => Number.isFinite(p.ele)).length;
     track = { name, ...buildTrack(points), temporary };
+    track.waypoints = locateWaypoints(track, waypoints);
+    renderWaypoints();
     track.eleInfo = eleInfo ? { ...eleInfo } : { own, dem: 0, missing: points.length - own, status: 'ok' };
     track.profile = buildProfile(track, settings.eleThresholdM);
     chart.setData(track, track.profile);
@@ -582,9 +645,9 @@ async function setTrack(name, points, { save = true, eleInfo = null, temporary =
 }
 
 async function saveTrack() {
-    const { name, points, eleInfo, temporary } = track;
+    const { name, points, eleInfo, temporary, waypoints } = track;
     try {
-        await kvSet('track', { name, points, eleInfo: { ...eleInfo, status: eleInfo.status === 'loading' ? 'failed' : eleInfo.status }, temporary });
+        await kvSet('track', { name, points, eleInfo: { ...eleInfo, status: eleInfo.status === 'loading' ? 'failed' : eleInfo.status }, temporary, waypoints });
         requestPersistence();
     } catch (err) {
         console.error('Saving track failed:', err);
@@ -628,6 +691,7 @@ async function clearTrack() {
     resetOffTrack();
     chart.setData(null, null);
     view.clearTrack();
+    renderWaypoints();
     renderTrackStatus();
     renderStats();
     try {
@@ -677,7 +741,7 @@ async function restoreAll() {
         const temporary = savedTrack.temporary ?? savedTrack.name === 'Test loop';
         if (!temporary || hasHikeToResume(savedRecording, key)) {
             await setTrack(savedTrack.name, savedTrack.points,
-                { save: false, eleInfo: savedTrack.eleInfo, temporary });
+                { save: false, eleInfo: savedTrack.eleInfo, temporary, waypoints: savedTrack.waypoints });
         } else {
             kvDelete('track').catch(() => {});
         }
@@ -704,13 +768,13 @@ $('gpx-input').addEventListener('change', async (event) => {
     event.target.value = ''; // allow choosing the same file again
     if (!file) return;
     try {
-        const { name, points } = parseGpx(await file.text());
+        const { name, points, waypoints } = parseGpx(await file.text());
         const trackName = name || file.name.replace(/\.gpx$/i, '');
         if (!await keepRecording(`Opening “${trackName}”`)) return;
-        await setTrack(trackName, points);
+        await setTrack(trackName, points, { waypoints });
         resetTrip();
         // Imported tracks go into the Track Library too (with DEM elevations once fetched).
-        await saveLibraryEntry({ id: `gpx-${Date.now()}`, name: trackName, points: track.points, eleInfo: track.eleInfo, savedAt: Date.now() });
+        await saveLibraryEntry({ id: `gpx-${Date.now()}`, name: trackName, points: track.points, eleInfo: track.eleInfo, waypoints, savedAt: Date.now() });
         renderLibrary();
         showTab('go');
         toast(`Imported ${formatDistance(track.total)} track into the Track Library: Start to follow it.`);
@@ -1271,7 +1335,7 @@ $('set-autodim').addEventListener('change', (e) => {
 
 $('reverse-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
-    setTrack(track.name, track.points.slice().reverse(), { eleInfo: track.eleInfo, temporary: track.temporary });
+    setTrack(track.name, track.points.slice().reverse(), { eleInfo: track.eleInfo, temporary: track.temporary, waypoints: track.waypoints });
     toast('Track direction reversed.');
 });
 
@@ -1310,7 +1374,7 @@ function downloadFile(file) {
 $('export-track-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
     const name = track.name || 'Track';
-    exportGpx(buildGpx({ name, desc: totalsText(track, track.profile), segments: [track.points] }), gpxFileName(name), name);
+    exportGpx(buildGpx({ name, desc: totalsText(track, track.profile), segments: [track.points], waypoints: track.waypoints }), gpxFileName(name), name);
 });
 
 $('export-hike-btn').addEventListener('click', () => exportHike());
@@ -1410,10 +1474,14 @@ function openPlanner(entry = null) {
 
 $('new-track-btn').addEventListener('click', () => openPlanner());
 $('lib-new-track-btn').addEventListener('click', () => openPlanner());
+$('guide-btn').addEventListener('click', () => {
+    if (hike.running) return toast('Stop the hike first (Go › Stop): importing replaces the map you are following.');
+    guideImport.open();
+});
 // A loaded GPX (or walk) is edited like a recorded walk: a new track, the original kept.
 $('edit-loaded-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded: load one from the Track Library first.');
-    openPlanner({ name: track.name || 'Track', points: track.points });
+    openPlanner({ name: track.name || 'Track', points: track.points, waypoints: track.waypoints });
 });
 
 // Saves the walk to the Track Library, with elevations: the planned
@@ -1465,7 +1533,7 @@ $('save-walk-lib-btn').addEventListener('click', () => saveWalkAsTrack());
 $('keep-track-btn').addEventListener('click', async () => {
     if (!track) return toast('No track loaded.');
     try {
-        await saveLibraryEntry({ id: `track-${Date.now()}`, name: track.name || 'Track', points: track.points, eleInfo: track.eleInfo, savedAt: Date.now() });
+        await saveLibraryEntry({ id: `track-${Date.now()}`, name: track.name || 'Track', points: track.points, eleInfo: track.eleInfo, waypoints: track.waypoints, savedAt: Date.now() });
         renderLibrary();
         toast(`Added “${track.name || 'Track'}” to the Track Library.`);
     } catch (err) {
@@ -1505,11 +1573,12 @@ async function renderLibrary() {
         const { total } = buildTrack(entry.points);
         const entryKey = trackKeyOf({ name: entry.name, points: entry.points, total });
         const isLoaded = () => entryKey === trackKey();
-        label.textContent = `${entry.name} · ${formatDistance(total)}${isLoaded() ? ' · loaded' : ''}`;
+        const stops = entry.waypoints?.length ? ` · ${entry.waypoints.length} waypoints` : '';
+        label.textContent = `${entry.name} · ${formatDistance(total)}${stops}${isLoaded() ? ' · loaded' : ''}`;
         const load = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Load' });
         load.addEventListener('click', async () => {
             if (!await keepRecording(`Loading “${entry.name}”`)) return;
-            await setTrack(entry.name, entry.points, { eleInfo: entry.eleInfo });
+            await setTrack(entry.name, entry.points, { eleInfo: entry.eleInfo, waypoints: entry.waypoints });
             resetTrip();
             showTab('go');
             toast(`Loaded ${formatDistance(track.total)} track: Start to follow it.`);
@@ -1585,7 +1654,7 @@ let currentTab = null;
 function showTab(tab) {
     if (!TABS.includes(tab)) tab = 'explore';
     if (tab === currentTab) return true;
-    if (currentTab === 'plan' && !planner.close()) return false;
+    if (currentTab === 'plan' && (!planner.close() || !guideImport.close())) return false;
     currentTab = tab;
     document.body.dataset.tab = tab;
     for (const el of document.querySelectorAll('[data-tabs]')) {

@@ -1,6 +1,7 @@
-// Minimal GPX reader: returns { name, points: [{lat, lon, ele}] }.
+// Minimal GPX reader: returns { name, points: [{lat, lon, ele}], waypoints }.
 // Uses track points (<trkpt>) and falls back to route points (<rtept>);
-// multiple segments/tracks are joined in file order.
+// multiple segments/tracks are joined in file order. waypoints: the <wpt>s, as
+// [{ lat, lon, name, note, restroom, mile }].
 
 export function parseGpx(text) {
     const doc = new DOMParser().parseFromString(text, 'application/xml');
@@ -33,13 +34,36 @@ export function parseGpx(text) {
     const nameNode = byTag('trk')[0]?.getElementsByTagNameNS('*', 'name')[0] ||
         byTag('rte')[0]?.getElementsByTagNameNS('*', 'name')[0] ||
         byTag('metadata')[0]?.getElementsByTagNameNS('*', 'name')[0];
-    return { name: nameNode ? nameNode.textContent.trim() : '', points };
+    return { name: nameNode ? nameNode.textContent.trim() : '', points, waypoints: readWaypoints(byTag('wpt')) };
+}
+
+function readWaypoints(nodes) {
+    const waypoints = [];
+    for (const node of nodes) {
+        const lat = parseFloat(node.getAttribute('lat'));
+        const lon = parseFloat(node.getAttribute('lon'));
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const child = (tag) => node.getElementsByTagNameNS('*', tag)[0]?.textContent.trim() ?? '';
+        const mile = SHEET_MILE.exec(child('cmt'));
+        const name = child('name');
+        waypoints.push({
+            lat, lon, name,
+            note: child('desc') || name,
+            restroom: /restroom/i.test(child('sym')),
+            mile: mile ? Number(mile[1]) : null,
+        });
+    }
+    return waypoints;
 }
 
 // ---------- Export ----------
 
 const escapeXml = (s) => String(s).replace(/[<>&"']/g, (c) =>
     ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]);
+
+// A waypoint's mileage on the club's sheet, kept in <cmt> so a re-import has it.
+const SHEET_MILE = /^Sheet mile ([\d.]+)$/;
+const WAYPOINT_NAME_LENGTH = 40;
 
 // Written as the description of hikes recorded without elevations (free
 // recording), so the file says why <ele> is missing; elevations can be filled
@@ -48,13 +72,27 @@ export const NO_ELEVATION_DESC = 'No elevation data (GPS altitude is not used). 
 
 // GPX 1.1 text for one track. segments: arrays of { lat, lon, ele?, time? }
 // (time in ms); each segment becomes a <trkseg> (a recorded hike has one per
-// Start/Stop). Elevations and times are written when present.
-export function buildGpx({ name = '', desc = '', segments, time = Date.now() }) {
+// Start/Stop). Elevations and times are written when present. waypoints:
+// [{ lat, lon, ele?, name?, note?, restroom?, mile? }] become <wpt>s (sym "Restroom"
+// is the common symbol other hiking apps show as restrooms).
+export function buildGpx({ name = '', desc = '', segments, waypoints = [], time = Date.now() }) {
     const point = (p) => {
         let inner = '';
         if (Number.isFinite(p.ele)) inner += `<ele>${p.ele.toFixed(1)}</ele>`;
         if (Number.isFinite(p.time)) inner += `<time>${new Date(p.time).toISOString()}</time>`;
         return `      <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lon.toFixed(7)}">${inner}</trkpt>`;
+    };
+    const wpt = (w) => {
+        // A short title for apps that only show the name; the sheet's words are in <desc>.
+        const title = w.name || (Number.isFinite(w.mile) ? `Mile ${w.mile}` : String(w.note ?? '').slice(0, WAYPOINT_NAME_LENGTH)) || 'Waypoint';
+        const parts = [
+            Number.isFinite(w.ele) ? `<ele>${w.ele.toFixed(1)}</ele>` : '',
+            `<name>${escapeXml(title)}</name>`,
+            Number.isFinite(w.mile) ? `<cmt>Sheet mile ${w.mile}</cmt>` : '',
+            w.note ? `<desc>${escapeXml(w.note)}</desc>` : '',
+            `<sym>${w.restroom ? 'Restroom' : 'Waypoint'}</sym>`,
+        ];
+        return `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lon.toFixed(7)}">${parts.join('')}</wpt>`;
     };
     const nameTag = name ? `<name>${escapeXml(name)}</name>` : '';
     const descTag = desc ? `<desc>${escapeXml(desc)}</desc>` : '';
@@ -65,6 +103,7 @@ export function buildGpx({ name = '', desc = '', segments, time = Date.now() }) 
         '     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
         '     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">',
         `  <metadata>${nameTag}${descTag}<time>${new Date(time).toISOString()}</time></metadata>`,
+        ...waypoints.map(wpt), // GPX 1.1 wants these before the track
         `  <trk>${nameTag}${descTag}`,
         ...segments.filter((seg) => seg.length).flatMap((seg) => ['    <trkseg>', ...seg.map(point), '    </trkseg>']),
         '  </trk>',
