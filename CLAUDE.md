@@ -262,7 +262,18 @@ wanted eventually.
 ### Reopening the app (done in v0.6.0, requested 2026-10-28)
 - Settings › Remove track already existed (since v0.2.0).
 - The **test loop is temporary**: not restored on reopening unless a hike with it was
-  running (it is then restored and the Resume prompt shows).
+  running with some time recorded (it is then restored and the Resume prompt shows). A
+  saved "Test loop" with no temporary flag (from before v0.6.0) counts as temporary
+  (v0.10.1).
+- **Removing the test loop** (v0.10.1, requested 2026-11-06 after the iPhone test): Track
+  Library › Loaded track shows it as "temporary test track" with a **Remove test loop**
+  button (ordinary tracks: **Unload track**, as in Go). Removing it stops and clears its test
+  hike too (after "Keep your walk?" if unsaved: Export / Save as track / Discard / Cancel), so
+  the app opens clean. "Start fresh" in the Resume prompt does the same. Unloading an ordinary
+  track still leaves the recording alone.
+- **Delete in the Track Library also unloads that track if it is the loaded one** (v0.10.1;
+  the row says "loaded"), otherwise it stays on the map and Delete looks broken. During a
+  hike it stays loaded, with a note.
 - With no track: the map opens where the last recording ended, else on the **current
   position** (one location request, cached up to 5 min, no dot drawn until Start).
 

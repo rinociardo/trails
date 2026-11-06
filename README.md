@@ -138,6 +138,11 @@ The steps are in the order you should run them.
 23. **Place search.** Needs the relay redeployed with search (see `relay/README.md`). Explore › type "Tre Cime di Lavaredo" › Search (or the keyboard's Search key).
    *Expect:* a short list (peak, town, address… with the kind under each name); tap one: the map flies there and drops a pin. Nothing is searched while you type. Clear the field: the pin goes. Offline: "Place search unavailable right now (offline?)".
    **Locate me:** *Expect:* the map jumps to you with the blue dot and "You are here (±5 m)".
+24. **Removing the test loop (v0.10.1).** Settings › Testing › Test loop here, then Track Library. *Expect:* Loaded track says "Test loop · … · temporary test track", with a red **Remove test loop** button.
+   **With no hike:** tap it and confirm. *Expect:* "None" under Loaded track; force-close and reopen: no track, no prompt.
+   **With a test hike:** create the loop again and press Go › Start (simulated is fine). After a few seconds, Track Library › **Remove test loop**. *Expect:* if a walk was recorded, **Keep your walk?** with Export / Save as track / Discard / Cancel (if not, a plain confirmation). Cancel: nothing changes and the hike keeps running. Tap Remove again › **Discard**: the hike stops and the loop is gone. Force-close and reopen: no track, no prompt, Current recording says "Nothing recorded".
+   **After a force-close:** create the loop, Start, walk or simulate a little, force-close, reopen. *Expect:* the Resume prompt. **Start fresh** › Discard: the loop is gone at once, and stays gone on reopening.
+   **Library copy:** create the loop, Add to library. *Expect:* its row says "loaded". Delete it and confirm: the row and the loaded loop both go.
 
 ### If Wake Lock fails
 

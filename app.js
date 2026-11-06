@@ -496,8 +496,24 @@ function saveRecording() {
     kvSet('recording', record).catch((err) => console.error('Saving recording failed:', err));
 }
 
+// Time was recorded: without any, restoreRecording has nothing to bring back.
+const recordingHasTime = (saved) => saved.motion.movingMs + saved.motion.stoppedMs > 0;
+
+// A hike on this track that was running when the app closed, so the Resume prompt
+// will show. Only this brings the test loop back.
+function hasHikeToResume(saved, key) {
+    return Boolean(saved?.running) && saved.trackKey === key && recordingHasTime(saved);
+}
+
+// Stops any hike and clears the recording, here and on the device.
+function discardRecording() {
+    if (hike.running) stopHike();
+    resetTrip();
+    kvDelete('recording').catch(() => {});
+}
+
 function restoreRecording(saved) {
-    if (!saved || saved.motion.movingMs + saved.motion.stoppedMs === 0) return;
+    if (!saved || !recordingHasTime(saved)) return;
 
     const apply = () => {
         motion.restore(saved.motion);
@@ -540,8 +556,8 @@ function restoreRecording(saved) {
         $('resume-dialog').close();
         apply();
         if (await keepRecording('Starting fresh')) {
-            resetTrip();
-            kvDelete('recording').catch(() => {});
+            discardRecording();
+            if (track?.temporary) await clearTrack();
         }
     };
 }
@@ -621,6 +637,31 @@ async function clearTrack() {
     }
 }
 
+// Unload track, or Remove test loop. Library copies are kept. An ordinary track
+// leaves the recording alone; the test loop takes its test hike with it, so the
+// app opens clean afterwards. Resolves true if the track was removed.
+async function removeLoadedTrack({ confirmed = false } = {}) {
+    if (!track) {
+        toast('No track loaded.');
+        return false;
+    }
+    if (track.temporary) {
+        if (walkUnsaved()) {
+            if (!await keepRecording('Removing the test loop')) return false;
+        } else if (!confirmed && !confirm(hike.running || path.pointCount
+            ? 'Remove the test loop? Its test hike is stopped and cleared.'
+            : 'Remove the test loop?')) {
+            return false;
+        }
+        discardRecording();
+    } else if (!confirmed && !confirm(`Unload “${track.name || 'the track'}”? Copies in the Track Library are kept.`)) {
+        return false;
+    }
+    await clearTrack();
+    renderLibrary();
+    return true;
+}
+
 // On opening: the saved track (the test loop only while a hike with it was in
 // progress), then the recording. With no track, the map opens where you are.
 async function restoreAll() {
@@ -632,9 +673,11 @@ async function restoreAll() {
     }
     if (savedTrack?.points?.length >= 2) {
         const key = trackKeyOf({ name: savedTrack.name, ...buildTrack(savedTrack.points) });
-        if (!savedTrack.temporary || (savedRecording?.running && savedRecording.trackKey === key)) {
+        // A test loop saved before v0.6.0 has no flag: its name is all there is to go on.
+        const temporary = savedTrack.temporary ?? savedTrack.name === 'Test loop';
+        if (!temporary || hasHikeToResume(savedRecording, key)) {
             await setTrack(savedTrack.name, savedTrack.points,
-                { save: false, eleInfo: savedTrack.eleInfo, temporary: savedTrack.temporary });
+                { save: false, eleInfo: savedTrack.eleInfo, temporary });
         } else {
             kvDelete('track').catch(() => {});
         }
@@ -1433,7 +1476,12 @@ $('keep-track-btn').addEventListener('click', async () => {
 
 // The Track Library's lines about the loaded track and the current recording.
 function renderLibraryStatus() {
-    setText($('lib-loaded'), track ? `${track.name || 'Track'} · ${formatDistance(track.total)}` : 'None: load one above, or import a GPX.');
+    setText($('lib-loaded'), track
+        ? `${track.name || 'Track'} · ${formatDistance(track.total)}${track.temporary ? ' · temporary test track' : ''}`
+        : 'None: load one above, or import a GPX.');
+    const unload = $('lib-unload-btn');
+    unload.hidden = !track;
+    unload.textContent = track?.temporary ? 'Remove test loop' : 'Unload track';
     const recorded = path.pointCount >= 2;
     setText($('lib-recording'), recorded
         ? `Walked ${formatDistance(motion.walked)} · moving ${formatDuration(motion.movingMs)}` +
@@ -1454,7 +1502,10 @@ async function renderLibrary() {
         const row = document.createElement('div');
         row.className = 'library-row';
         const label = document.createElement('span');
-        label.textContent = `${entry.name} · ${formatDistance(buildTrack(entry.points).total)}`;
+        const { total } = buildTrack(entry.points);
+        const entryKey = trackKeyOf({ name: entry.name, points: entry.points, total });
+        const isLoaded = () => entryKey === trackKey();
+        label.textContent = `${entry.name} · ${formatDistance(total)}${isLoaded() ? ' · loaded' : ''}`;
         const load = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Load' });
         load.addEventListener('click', async () => {
             if (!await keepRecording(`Loading “${entry.name}”`)) return;
@@ -1467,9 +1518,14 @@ async function renderLibrary() {
         edit.addEventListener('click', () => openPlanner(entry));
         const del = Object.assign(document.createElement('button'), { type: 'button', className: 'danger', textContent: 'Delete' });
         del.addEventListener('click', async () => {
-            if (!confirm(`Delete “${entry.name}” from this device?`)) return;
+            const loaded = isLoaded();
+            if (!confirm(`Delete “${entry.name}” from this device?` +
+                (loaded && !hike.running ? ' It is loaded now, so it is unloaded too.' : ''))) return;
             await kvSet('library', (await loadLibrary()).filter((e) => e.id !== entry.id));
             renderLibrary();
+            // Otherwise it would stay on the map and look as if Delete had failed.
+            if (loaded && hike.running) toast('Deleted from the library. Still loaded for your hike: Stop, then Unload track.', 5000);
+            else if (loaded) await removeLoadedTrack({ confirmed: true });
         });
         row.append(label, load, edit, del);
         return row;
@@ -1484,10 +1540,8 @@ $('fill-ele-btn').addEventListener('click', () => {
     fillTrackElevations();
 });
 
-$('clear-btn').addEventListener('click', () => {
-    if (!track) return toast('No track loaded.');
-    if (confirm(`Unload “${track.name || 'the track'}”? Copies in the Track Library are kept.`)) clearTrack();
-});
+$('clear-btn').addEventListener('click', () => removeLoadedTrack());
+$('lib-unload-btn').addEventListener('click', () => removeLoadedTrack());
 
 $('sample-btn').addEventListener('click', async () => {
     try {
