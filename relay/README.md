@@ -2,7 +2,7 @@
 
 A tiny Cloudflare Worker (a small program that runs on Cloudflare's servers) that
 holds **your** openrouteservice key and asks openrouteservice for a hiking route
-whenever the Trails planner needs one. Nobody using the app needs a key or any setup,
+whenever the Trails planner needs one, and for places when you search in Explore. Nobody using the app needs a key or any setup,
 and the key never appears in the app or in this repo.
 
 openrouteservice's FAQ asks for exactly this: a key belongs to one person and must not
@@ -11,12 +11,15 @@ be used inside an app; route the app's requests through your own server instead
 
 ## What it allows
 
-- Only `POST /route` with two nearby points (at most ≈50 km apart), as the planner sends.
+- Only `POST /route` with two nearby points (at most ≈50 km apart), as the planner sends,
+  and `POST /geocode` with a place name (at most 200 characters, 8 results, optionally
+  near a point). Nothing else of openrouteservice is reachable through it.
 - Only from the sites in `ALLOWED_ORIGINS` (`wrangler.toml`): the app on
   rinociardo.github.io, and `localhost:8000` for testing on the computer.
 - At most 30 routes a minute per visitor (per IP address, counted per Cloudflare location).
-- Your key's limits apply to everyone together: 2,000 routes a day, 40 a minute. When
-  they are reached the planner draws segments straight with a short note.
+- Your key's limits apply to everyone together: 2,000 routes a day, 40 a minute; place
+  searches have their own quota (shown in your dashboard at account.heigit.org). When a
+  limit is reached the planner draws segments straight, and search says so.
 
 Limits of the protection: other websites can't use it, but a script can pretend to be
 the app. The rate limit and openrouteservice's daily quota cap the damage: the worst
@@ -80,6 +83,21 @@ For every openrouteservice error it logs the status, content type, server and me
 plus facts about the key that don't reveal it (`length`, `surroundingSpace`,
 `unusualCharacters`). The key itself is never logged or sent back: if an answer ever
 quotes it, it is replaced by `[key]`.
+
+## Updating the relay
+
+After a change to `worker.js` or `wrangler.toml` (e.g. v0.10.0 added place search):
+```
+cd ~/Projects/Trails/relay
+npx wrangler@4.151.0 deploy
+```
+The key stays stored; no need to enter it again. Check place search:
+```
+curl -s -i -X POST https://trails-relay.rinociardo.workers.dev/geocode \
+  -H 'Origin: https://rinociardo.github.io' -H 'Content-Type: application/json' \
+  -d '{"text":"Wengen"}' | head -c 400
+```
+Expect `HTTP/2 200` and `{"geocoding":…,"type":"FeatureCollection",…`.
 
 ## Later
 

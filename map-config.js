@@ -42,15 +42,27 @@ export const DEM = {
     ],
 };
 
+// The Trails relay (relay/ in the repo, a Cloudflare Worker that holds the owner's
+// openrouteservice key as a secret: no key in this code, no setup for users).
+// It answers POST /route and POST /geocode only. Empty: routing and search are off.
+const RELAY = 'https://trails-relay.rinociardo.workers.dev';
+
 // Trail routing for the planner (decided 2026-10-28): openrouteservice, foot-hiking
-// profile, through the Trails relay (relay/ in the repo, a Cloudflare Worker that
-// holds the owner's key as a secret: no key in this code, no setup for users).
-// With relayUrl empty (relay not deployed) segments are drawn straight.
+// profile, through the relay. Without it, segments are drawn straight.
 // The key's limits: 2,000 routes a day, 40 a minute, shared by everyone. Attribution required.
 export const ROUTER = {
     name: 'openrouteservice',
-    relayUrl: 'https://trails-relay.rinociardo.workers.dev/route',
+    relayUrl: RELAY && `${RELAY}/route`,
     attribution: 'Routes © openrouteservice.org by HeiGIT · map data © OpenStreetMap contributors',
+};
+
+// Place search (Explore; later From -> To), decided 2026-10-29: openrouteservice
+// geocoding (Pelias) through the relay. Searches run on Enter only (no
+// as-you-type suggestions) to save the shared daily quota.
+export const GEOCODER = {
+    name: 'openrouteservice',
+    relayUrl: RELAY && `${RELAY}/geocode`,
+    attribution: 'Search © openrouteservice.org by HeiGIT · Pelias · data © OpenStreetMap contributors, Who\'s On First, GeoNames, OpenAddresses',
 };
 
 // Elevation data for hill shading and 3D terrain; null keeps the map flat (2D).

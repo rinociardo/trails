@@ -1,11 +1,15 @@
-// Trails routing relay: a Cloudflare Worker that holds the openrouteservice key
-// as a secret (ORS_KEY), so the app needs no key. It only answers the Trails
-// planner's requests (one foot-hiking route between two points), only from the
-// allowed sites (ALLOWED_ORIGINS), with a per-visitor rate limit (RATE_LIMITER).
+// Trails relay: a Cloudflare Worker that holds the openrouteservice key as a
+// secret (ORS_KEY), so the app needs no key. It answers only the app's two kinds
+// of request: POST /route (one foot-hiking route between two points) and
+// POST /geocode (a place search), only from the allowed sites (ALLOWED_ORIGINS),
+// with a per-visitor rate limit (RATE_LIMITER) shared by both.
 // openrouteservice's FAQ recommends exactly this: keep the key on a server that
 // calls the API for the app.
 
 const ORS_URL = 'https://api.openrouteservice.org/v2/directions/foot-hiking/geojson';
+const GEOCODE_URL = 'https://api.openrouteservice.org/geocode/search';
+const MAX_TEXT = 200;      // characters of a place search
+const GEOCODE_RESULTS = 8; // a short list
 const MAX_BODY_BYTES = 2000;
 const MAX_SPAN_DEG = 0.5; // ≈50 km between the two points: planner segments are much shorter
 
@@ -39,6 +43,20 @@ function orsMessage(text) {
     return { message: text.trim().slice(0, 300) };
 }
 
+// A place search: { text, focus?: [lon, lat] } (focus ranks nearby places first).
+function geocodeQuery(body) {
+    const text = typeof body?.text === 'string' ? body.text.trim() : '';
+    if (!text || text.length > MAX_TEXT) return null;
+    const q = new URLSearchParams({ text, size: String(GEOCODE_RESULTS) });
+    const f = body.focus;
+    if (f !== undefined) {
+        if (!Array.isArray(f) || f.length !== 2 || !f.every(Number.isFinite) || Math.abs(f[0]) > 180 || Math.abs(f[1]) > 90) return null;
+        q.set('focus.point.lon', String(f[0]));
+        q.set('focus.point.lat', String(f[1]));
+    }
+    return q;
+}
+
 export default {
     async fetch(request, env) {
         const origin = request.headers.get('Origin') ?? '';
@@ -59,8 +77,9 @@ export default {
                 headers: { ...cors, 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' },
             });
         }
-        if (request.method !== 'POST' || new URL(request.url).pathname !== '/route') {
-            return reply(404, 'not found: the relay only answers POST /route');
+        const path = new URL(request.url).pathname;
+        if (request.method !== 'POST' || (path !== '/route' && path !== '/geocode')) {
+            return reply(404, 'not found: the relay only answers POST /route and POST /geocode');
         }
         const key = (env.ORS_KEY ?? '').trim();
         if (!key) return reply(503, 'relay not configured: the openrouteservice key (secret ORS_KEY) is missing');
@@ -73,23 +92,32 @@ export default {
 
         const text = await request.text();
         if (text.length > MAX_BODY_BYTES) return reply(413, `request too large: at most ${MAX_BODY_BYTES} bytes`);
-        let coordinates;
+        let body = null;
         try {
-            ({ coordinates } = JSON.parse(text));
+            body = JSON.parse(text);
         } catch {
             // handled below
         }
-        if (!validCoordinates(coordinates)) {
-            return reply(400, 'bad request: expected {"coordinates": [[lon, lat], [lon, lat]]}, two points at most 0.5° apart');
+        let call;
+        if (path === '/geocode') {
+            const query = geocodeQuery(body);
+            if (!query) return reply(400, `bad request: expected {"text": "a place", "focus": [lon, lat] (optional)}, at most ${MAX_TEXT} characters`);
+            call = [`${GEOCODE_URL}?${query}`, { headers: { Authorization: key, Accept: 'application/json, application/geo+json' } }];
+        } else {
+            const coordinates = body?.coordinates;
+            if (!validCoordinates(coordinates)) {
+                return reply(400, 'bad request: expected {"coordinates": [[lon, lat], [lon, lat]]}, two points at most 0.5° apart');
+            }
+            call = [ORS_URL, {
+                method: 'POST',
+                headers: { Authorization: key, 'Content-Type': 'application/json', Accept: 'application/json, application/geo+json' },
+                body: JSON.stringify({ coordinates, instructions: false }),
+            }];
         }
 
         let upstream;
         try {
-            upstream = await fetch(ORS_URL, {
-                method: 'POST',
-                headers: { Authorization: key, 'Content-Type': 'application/json', Accept: 'application/json, application/geo+json' },
-                body: JSON.stringify({ coordinates, instructions: false }),
-            });
+            upstream = await fetch(...call);
         } catch (err) {
             console.log('openrouteservice unreachable:', String(err?.message ?? err).replaceAll(key, '[key]'), 'key:', keyShape(env.ORS_KEY));
             return reply(502, 'openrouteservice unreachable from the relay');
@@ -103,14 +131,15 @@ export default {
 
         // An error: pass openrouteservice's own message on (never the key), and log
         // what came back so `wrangler tail` shows the cause.
-        const body = (await upstream.text()).replaceAll(key, '[key]');
-        const { code, message } = orsMessage(body);
+        const answer = (await upstream.text()).replaceAll(key, '[key]');
+        const { code, message } = orsMessage(answer);
         console.log('openrouteservice error', JSON.stringify({
+            path,
             status: upstream.status,
             contentType: upstream.headers.get('Content-Type'),
             server: upstream.headers.get('Server'),
-            bodyLength: body.length,
-            body: body.slice(0, 500),
+            bodyLength: answer.length,
+            body: answer.slice(0, 500),
             key: keyShape(env.ORS_KEY),
         }));
         const error = { code, message: message || `openrouteservice answered HTTP ${upstream.status} with no message` };

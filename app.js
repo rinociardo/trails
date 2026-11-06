@@ -8,6 +8,8 @@ import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
 import { createPlanner } from './planner.js';
 import { ROUTER_ATTRIBUTION } from './router.js';
+import { searchPlaces, searchAvailable, GEOCODER_ATTRIBUTION } from './geocoder.js';
+import { makeUnits, defaultUnitSystem } from './units.js';
 
 // Developer switches: ?sim (or ?sim=N for N× walking speed, default 10) replays
 // the loaded track with GPS noise, a stop and a detour; ?terrain=demo previews
@@ -38,6 +40,8 @@ const DEFAULT_SETTINGS = {
     debug: false,
     simulate: false,
     panelOpen: true,
+    units: defaultUnitSystem(navigator.language), // 'metric' or 'imperial'
+    tab: 'explore',         // the tab shown last
 };
 
 const $ = (id) => document.getElementById(id);
@@ -69,6 +73,7 @@ function saveSettings() {
 }
 
 const settings = loadSettings();
+let units = makeUnits(settings.units);
 
 // Simulated GPS: ?sim in the address, or Settings › Testing (needed for the Home
 // Screen app, which always opens the plain address).
@@ -118,14 +123,14 @@ function setStatus(el, text, tone = '') {
     el.classList.toggle('warn', tone === 'warn');
 }
 
+// In the chosen units (Settings › Units); values stay in metres inside the app.
 function formatDistance(m) {
-    if (m == null || !Number.isFinite(m)) return '–';
-    if (m < 1000) return `${Math.round(m)} m`;
-    return `${(m / 1000).toFixed(m < 10_000 ? 2 : 1)} km`;
+    return units.distance(m);
 }
 
-function formatMetres(m) {
-    return m == null || !Number.isFinite(m) ? '–' : `${Math.round(m)} m`;
+// Elevations, climbs, accuracies: m or ft.
+function formatMetres(m, decimals = 0) {
+    return units.length(m, decimals);
 }
 
 // Local date and time, e.g. "2026-10-28 15:40".
@@ -133,6 +138,14 @@ function formatDateTime(time) {
     const d = new Date(time);
     const pad = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Totals in the chosen units, for the description inside exported GPX files
+// (the points themselves are in metres, as the GPX standard requires).
+function totalsText(t, profile) {
+    const parts = [`Distance ${formatDistance(t.total)}`];
+    if (profile) parts.push(`ascent ${formatMetres(profile.totalAscent)}`, `descent ${formatMetres(profile.totalDescent)}`);
+    return parts.join(', ');
 }
 
 function formatDuration(ms) {
@@ -151,11 +164,12 @@ function toast(message, ms = 3000) {
     toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
-// The map fills the space between the stats bar and the trip panel.
+// The map fills the space between the top bar and the trip panel + bottom bar.
 function updateLayout() {
     const root = document.documentElement.style;
     root.setProperty('--stats-h', `${$('stats').offsetHeight}px`);
     root.setProperty('--panel-h', `${$('trip-panel').offsetHeight}px`);
+    root.setProperty('--bottom-h', `${$('bottom').offsetHeight}px`);
 }
 $('trip-panel').classList.toggle('collapsed', !settings.panelOpen);
 $('trip-toggle').setAttribute('aria-expanded', String(settings.panelOpen));
@@ -163,6 +177,7 @@ updateLayout();
 const layoutObserver = new ResizeObserver(updateLayout);
 layoutObserver.observe($('stats'));
 layoutObserver.observe($('trip-panel'));
+layoutObserver.observe($('bottom'));
 
 $('trip-toggle').addEventListener('click', () => {
     settings.panelOpen = !settings.panelOpen;
@@ -183,7 +198,7 @@ view.on('webglcontextlost', () => {
     toast('The map display was reset by the phone. It should redraw by itself.', 6000);
 });
 
-const chart = createProfileChart($('profile'));
+const chart = createProfileChart($('profile'), { getUnits: () => units });
 
 const planner = createPlanner({
     view,
@@ -195,10 +210,13 @@ const planner = createPlanner({
     formatDistance,
     formatMetres,
     formatDateTime,
-    // Back to the loaded track's profile and numbers.
+    describe: totalsText,
+    onOpen: updateChrome,
+    // Back to the loaded track's profile and numbers, and the Plan start card.
     onExit() {
         chart.setData(track, track?.profile ?? null);
         renderTrip();
+        updateChrome();
     },
 });
 
@@ -308,7 +326,7 @@ function elevationText({ points, eleInfo: e }) {
     if (e.own) parts.push(`${e.own} from the file`);
     if (e.dem) parts.push(`${e.dem} from the DEM (${DEM_NAME})`);
     if (e.missing && e.status === 'tooLarge') parts.push('track too spread out to fetch the DEM');
-    else if (e.missing) parts.push('DEM not reachable (offline?): Settings › Fill elevations retries');
+    else if (e.missing) parts.push('DEM not reachable (offline?): Fill elevations retries');
     return `Elevation: ${n - e.missing} of ${n} points · ${parts.join(' · ')}`;
 }
 
@@ -330,8 +348,7 @@ function renderWalk(now = Date.now()) {
     const walked = recorded ? formatDistance(motion.walked) : '–';
     const moving = recorded ? formatDuration(motion.movingMs) : '–';
     // Average speed over moving time only; meaningless in the first minute.
-    const hours = motion.movingMs / 3_600_000;
-    const speed = motion.movingMs >= 60_000 ? `${(motion.walked / 1000 / hours).toFixed(1)} km/h` : '–';
+    const speed = motion.movingMs >= 60_000 ? units.speed(motion.walked / (motion.movingMs / 1000)) : '–';
     setText($('w-walked'), walked);
     setText($('w-moving'), moving);
     setText($('w-stopped'), recorded ? formatDuration(motion.stoppedMs) : '–');
@@ -360,7 +377,9 @@ function renderWalk(now = Date.now()) {
 // parts that compare against a track are hidden.
 function renderTrackStatus() {
     document.body.classList.toggle('free-mode', !track);
-    let text = hike.running ? 'Free recording (no track)' : 'No track — Open GPX, or Start to record';
+    $('go-dot').hidden = !hike.running; // the hike goes on while other tabs are shown
+    $('edit-loaded-btn').disabled = !track;
+    let text = hike.running ? 'Free recording (no track)' : 'No track · Start records a free walk';
     if (track) text = `${track.name || 'Track'} · ${formatDistance(track.total)}`;
     setText($('track-status'), text);
     renderWalk();
@@ -383,8 +402,8 @@ function climbLine(now) {
     const spanS = (w[w.length - 1].time - w[0].time) / 1000;
     const net = w[w.length - 1].ele - w[0].ele;
     const rate = spanS > 0 ? Math.round(Math.abs(net) / spanS * 3600) : 0;
-    return `Climb    ${range.toFixed(1)} m in ${Math.round(spanS)} s (net ${net >= 0 ? '+' : '−'}${Math.abs(net).toFixed(1)} m, ` +
-        `${rate} m/h); limit ${settings.stopClimbM} m` +
+    return `Climb    ${formatMetres(range, 1)} in ${Math.round(spanS)} s (net ${net >= 0 ? '+' : '−'}${formatMetres(Math.abs(net), 1)}, ` +
+        `${formatMetres(rate)}/h); limit ${formatMetres(settings.stopClimbM, 1)}` +
         (range > settings.stopClimbM ? ' → not a stop' : '');
 }
 
@@ -400,14 +419,14 @@ function renderDebug() {
     const lines = [
         `State    ${hike.running ? motion.state : 'not recording'}` +
             (stopped ? ` ${formatDuration(now - motion.stoppedSince)}` : ''),
-        raw ? `Raw      ±${Math.round(raw.acc)} m ${raw.accepted ? 'used' : 'DISCARDED'}` +
+        raw ? `Raw      ±${formatMetres(raw.acc)} ${raw.accepted ? 'used' : 'DISCARDED'}` +
             (debug.lastInterval ? `, every ${(debug.lastInterval / 1000).toFixed(1)} s` : '') : 'Raw      –',
-        `Discard  ${debug.discarded} fixes worse than ${settings.maxAccuracyM} m`,
-        sm ? `Smooth   ${sm.count}/${settings.smoothWindow} fixes, ±${sm.acc.toFixed(1)} m` : 'Smooth   –',
-        raw && sm ? `Raw→smooth ${haversine(raw, sm).toFixed(1)} m` : 'Raw→smooth –',
+        `Discard  ${debug.discarded} fixes worse than ${formatMetres(settings.maxAccuracyM)}`,
+        sm ? `Smooth   ${sm.count}/${settings.smoothWindow} fixes, ±${formatMetres(sm.acc, 1)}` : 'Smooth   –',
+        raw && sm ? `Raw→smooth ${formatMetres(haversine(raw, sm), 1)}` : 'Raw→smooth –',
         stopped
-            ? `Stop     inside ${Math.round(motion.radius)} m of stop centre`
-            : `Stop chk spread ${motion.history.length > 1 ? Math.round(motion.spread()) : 0} m of ${Math.round(motion.radius)} m, ` +
+            ? `Stop     inside ${formatMetres(motion.radius)} of stop centre`
+            : `Stop chk spread ${formatMetres(motion.history.length > 1 ? motion.spread() : 0)} of ${formatMetres(motion.radius)}, ` +
               `need ${settings.stopTimeS} s`,
         climbLine(now),
         hike.progress ? `Snapped  ${formatDistance(hike.progress.along)}, ${formatMetres(hike.progress.offset)} off` : 'Snapped  –',
@@ -511,6 +530,7 @@ function restoreRecording(saved) {
     // Handled on the tap itself, so Start may use Wake Lock and sound.
     $('resume-yes').onclick = () => {
         $('resume-dialog').close();
+        showTab('go');
         apply();
         startHike();
     };
@@ -557,7 +577,7 @@ async function saveTrack() {
 }
 
 // Missing elevations from the DEM (needs the network). The track keeps them,
-// so this happens once per track; Settings › Fill elevations retries.
+// so this happens once per track; Go › Fill elevations retries.
 async function fillTrackElevations() {
     const t = track;
     if (!t?.eleInfo.missing || t.eleInfo.status === 'loading') return;
@@ -622,7 +642,7 @@ async function restoreAll() {
     restoreRecording(savedRecording);
     if (!track) {
         openOnMyPosition();
-        toast('Open a GPX file, or press Start to record a walk.');
+        toast('Search a place, load a track from the Track Library, or Go › Start to record a walk.', 5000);
     }
 }
 
@@ -646,7 +666,11 @@ $('gpx-input').addEventListener('change', async (event) => {
         if (!await keepRecording(`Opening “${trackName}”`)) return;
         await setTrack(trackName, points);
         resetTrip();
-        toast(`Loaded ${formatDistance(track.total)} track.`);
+        // Imported tracks go into the Track Library too (with DEM elevations once fetched).
+        await saveLibraryEntry({ id: `gpx-${Date.now()}`, name: trackName, points: track.points, eleInfo: track.eleInfo, savedAt: Date.now() });
+        renderLibrary();
+        showTab('go');
+        toast(`Imported ${formatDistance(track.total)} track into the Track Library: Start to follow it.`);
     } catch (err) {
         console.error('GPX import failed:', err);
         toast(err.message || 'Could not read this file.', 5000);
@@ -786,7 +810,7 @@ function resetIdleTimer() {
     clearTimeout(idleTimer);
     if (!hike.running || hike.dimmed || settings.autoDimS <= 0) return;
     idleTimer = setTimeout(() => {
-        if (!$('settings').open) enterDim();
+        if (currentTab !== 'settings') enterDim();
     }, settings.autoDimS * 1000);
 }
 
@@ -820,12 +844,12 @@ function onFix(position) {
     pushLimited(debug.raw, { ...raw, accepted: Boolean(smoothed) });
     if (!smoothed) {
         debug.discarded++;
-        setStatus($('gps-status'), `GPS weak ±${Math.round(raw.acc)} m (ignored)`, 'warn');
+        setStatus($('gps-status'), `GPS weak ±${formatMetres(raw.acc)} (ignored)`, 'warn');
         renderDebug();
         return;
     }
     pushLimited(debug.smooth, smoothed);
-    setStatus($('gps-status'), `GPS ±${Math.round(raw.acc)} m`, 'ok');
+    setStatus($('gps-status'), `GPS ±${formatMetres(raw.acc)}`, 'ok');
 
     // Snap first (while moving): stop detection uses the track elevation here
     // to tell a slow steep climb from a stop.
@@ -1003,7 +1027,7 @@ function startHike() {
     saveRecording();
 }
 
-// Stop pauses the recording; Start continues it (Settings › Reset walked/time).
+// Stop pauses the recording; Start continues it (Track Library › Reset walked/time).
 function stopHike() {
     if (hike.watchId != null) navigator.geolocation.clearWatch(hike.watchId);
     clearInterval(hike.simTimer);
@@ -1045,6 +1069,7 @@ async function fillDeviceInfo() {
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
     setText($('info-mode'), standalone ? 'Home Screen app' : 'Browser tab');
     setText($('info-wakelock'), 'wakeLock' in navigator ? 'Supported' : 'Not supported');
+    setText($('info-wakelock-inline'), 'wakeLock' in navigator ? 'supported' : 'not supported');
     setText($('info-vibrate'), 'vibrate' in navigator ? 'Supported' : 'Not available (normal on iPhone)');
     try {
         const persisted = await navigator.storage?.persisted?.();
@@ -1057,25 +1082,21 @@ async function fillDeviceInfo() {
     navigator.serviceWorker?.controller?.postMessage({ type: 'GET_VERSION' });
 }
 
-$('settings-btn').addEventListener('click', () => {
-    $('set-offtrack').value = settings.offTrackM;
-    $('set-offtrack-straight').value = settings.offTrackStraightM;
+// Fills the Settings page with the current values (each time it is shown).
+function fillSettings() {
+    $('set-units').value = units.system;
+    for (const id of Object.keys(LENGTH_FIELDS)) showLengthSetting(id);
     $('set-steep').value = settings.steepSlopeDeg;
     $('set-sound').checked = settings.sound;
     $('set-autodim').value = String(settings.autoDimS);
-    $('set-maxacc').value = settings.maxAccuracyM;
     $('set-window').value = settings.smoothWindow;
-    $('set-stopradius').value = settings.stopRadiusM;
     $('set-stoptime').value = settings.stopTimeS;
-    $('set-stopclimb').value = settings.stopClimbM;
-    $('set-elethreshold').value = settings.eleThresholdM;
     $('set-debug').checked = settings.debug;
     $('set-simulate').checked = SIMULATE;
     $('set-simulate').disabled = params.has('sim');
+    for (const el of document.querySelectorAll('.u-len')) el.textContent = units.lengthUnit;
     fillDeviceInfo();
-    renderLibrary();
-    $('settings').showModal();
-});
+}
 
 // Number fields: clamp to the field's min/max, save, then apply.
 function bindNumberSetting(id, key, apply) {
@@ -1091,20 +1112,73 @@ function bindNumberSetting(id, key, apply) {
     });
 }
 
+// Length fields are typed in m or ft (Settings › Units) and kept in metres:
+// id -> [setting, min m, max m, step in m, step in ft].
+const LENGTH_FIELDS = {
+    'set-offtrack': ['offTrackM', 10, 500, 5, 10],
+    'set-offtrack-straight': ['offTrackStraightM', 10, 1000, 10, 25],
+    'set-maxacc': ['maxAccuracyM', 5, 100, 5, 10],
+    'set-stopradius': ['stopRadiusM', 5, 50, 1, 5],
+    'set-stopclimb': ['stopClimbM', 1, 20, 0.5, 1],
+    'set-elethreshold': ['eleThresholdM', 0, 20, 1, 1],
+};
+const lengthStep = (id) => LENGTH_FIELDS[id][units.system === 'imperial' ? 4 : 3];
+
+function showLengthSetting(id) {
+    const [key, minM, maxM] = LENGTH_FIELDS[id];
+    const step = lengthStep(id);
+    Object.assign($(id), {
+        min: units.toInput(minM, step),
+        max: units.toInput(maxM, step),
+        step,
+        value: units.toInput(settings[key], step),
+    });
+}
+
+function bindLengthSetting(id, apply) {
+    const [key, minM, maxM] = LENGTH_FIELDS[id];
+    $(id).addEventListener('change', (e) => {
+        const typed = Number(e.target.value);
+        settings[key] = Number.isFinite(typed) && e.target.value !== ''
+            ? Math.min(maxM, Math.max(minM, units.fromInput(typed)))
+            : DEFAULT_SETTINGS[key];
+        // Metric values stay whole metres (or half metres for the climb).
+        if (units.system === 'metric') settings[key] = Math.round(settings[key] / lengthStep(id)) * lengthStep(id);
+        showLengthSetting(id);
+        saveSettings();
+        apply?.();
+    });
+}
+
 const applyTracking = () => {
     smoother.configure({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
     motion.configure({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS, stopClimbM: settings.stopClimbM });
 };
-bindNumberSetting('set-maxacc', 'maxAccuracyM', applyTracking);
+bindLengthSetting('set-maxacc', applyTracking);
 bindNumberSetting('set-window', 'smoothWindow', applyTracking);
-bindNumberSetting('set-stopradius', 'stopRadiusM', applyTracking);
+bindLengthSetting('set-stopradius', applyTracking);
 bindNumberSetting('set-stoptime', 'stopTimeS', applyTracking);
-bindNumberSetting('set-stopclimb', 'stopClimbM', applyTracking);
-bindNumberSetting('set-offtrack-straight', 'offTrackStraightM');
+bindLengthSetting('set-stopclimb', applyTracking);
+bindLengthSetting('set-offtrack');
+bindLengthSetting('set-offtrack-straight');
 bindNumberSetting('set-steep', 'steepSlopeDeg', () => planner.refresh());
 
+// Everything shown in km/m switches to mi/ft (and back) at once.
+$('set-units').addEventListener('change', (e) => {
+    settings.units = e.target.value;
+    units = makeUnits(settings.units);
+    saveSettings();
+    fillSettings();
+    renderTrackStatus();
+    renderStats();
+    renderDebug();
+    chart.redraw();
+    planner.refresh();
+});
+
 $('router-credit').textContent = ROUTER_ATTRIBUTION;
-bindNumberSetting('set-elethreshold', 'eleThresholdM', () => {
+$('geocoder-credit').textContent = GEOCODER_ATTRIBUTION;
+bindLengthSetting('set-elethreshold', () => {
     if (!track) return;
     track.profile = buildProfile(track, settings.eleThresholdM);
     chart.setData(track, track.profile);
@@ -1137,13 +1211,6 @@ $('reset-trip-btn').addEventListener('click', async () => {
     }
 });
 
-$('set-offtrack').addEventListener('change', (e) => {
-    const value = Math.round(Number(e.target.value));
-    settings.offTrackM = Number.isFinite(value) ? Math.min(500, Math.max(10, value)) : DEFAULT_SETTINGS.offTrackM;
-    e.target.value = settings.offTrackM;
-    saveSettings();
-});
-
 $('set-sound').addEventListener('change', (e) => {
     settings.sound = e.target.checked;
     saveSettings();
@@ -1158,8 +1225,6 @@ $('set-autodim').addEventListener('change', (e) => {
     saveSettings();
     resetIdleTimer();
 });
-
-$('settings').addEventListener('close', resetIdleTimer);
 
 $('reverse-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
@@ -1202,7 +1267,7 @@ function downloadFile(file) {
 $('export-track-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
     const name = track.name || 'Track';
-    exportGpx(buildGpx({ name, segments: [track.points] }), gpxFileName(name), name);
+    exportGpx(buildGpx({ name, desc: totalsText(track, track.profile), segments: [track.points] }), gpxFileName(name), name);
 });
 
 $('export-hike-btn').addEventListener('click', () => exportHike());
@@ -1216,7 +1281,8 @@ async function exportHike() {
     const base = track?.name || 'Free recording';
     const name = track ? `${base} (walked)` : base;
     // Free recordings (or a track without elevations): say so, to fill from a DEM later.
-    const desc = path.hasElevations ? '' : NO_ELEVATION_DESC;
+    const walked = `Walked ${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}`;
+    const desc = path.hasElevations ? walked : `${walked}. ${NO_ELEVATION_DESC}`;
     const pointCount = path.pointCount;
     const exported = await exportGpx(buildGpx({ name, desc, segments: path.snapshot(), time: start }),
         gpxFileName(track ? `${base} walked` : base, start), name);
@@ -1282,7 +1348,7 @@ function walkedPoints() {
 
 const loadLibrary = async () => (await kvGet('library')) || [];
 
-// Adds an entry to Saved walks, or replaces the one with the same id (an edited track).
+// Adds an entry to the Track Library, or replaces the one with the same id (an edited track).
 async function saveLibraryEntry(entry) {
     const entries = await loadLibrary();
     const i = entries.findIndex((e) => e.id === entry.id);
@@ -1292,15 +1358,22 @@ async function saveLibraryEntry(entry) {
     requestPersistence();
 }
 
+// Plan tab: entry is a library entry (or { name, points }) to edit, or nothing for a new track.
 function openPlanner(entry = null) {
-    if (hike.running) return toast('Stop the hike first.');
-    $('settings').close();
+    if (hike.running) return toast('Stop the hike first (Go › Stop): planning replaces the map you are following.');
+    showTab('plan');
     planner.open(entry);
 }
 
 $('new-track-btn').addEventListener('click', () => openPlanner());
+$('lib-new-track-btn').addEventListener('click', () => openPlanner());
+// A loaded GPX (or walk) is edited like a recorded walk: a new track, the original kept.
+$('edit-loaded-btn').addEventListener('click', () => {
+    if (!track) return toast('No track loaded: load one from the Track Library first.');
+    openPlanner({ name: track.name || 'Track', points: track.points });
+});
 
-// Saves the walk to Settings › Saved walks, with elevations: the planned
+// Saves the walk to the Track Library, with elevations: the planned
 // track's where the walk followed it, the DEM's for the rest.
 async function saveWalkAsTrack() {
     const points = walkedPoints();
@@ -1336,13 +1409,38 @@ async function saveWalkAsTrack() {
     }
     markWalkSaved(pointCount);
     renderLibrary();
-    toast(`Saved “${name}” in Settings › Saved walks. ` +
+    toast(`Saved “${name}” in the Track Library. ` +
         (missing ? `${missing} points still need elevations (offline?): they are fetched when you load it.` : 'Elevations from the DEM.'), 7000);
     return true;
 }
 
 $('save-walk-btn').addEventListener('click', () => saveWalkAsTrack());
-$('save-walk-settings-btn').addEventListener('click', () => saveWalkAsTrack());
+$('save-walk-lib-btn').addEventListener('click', () => saveWalkAsTrack());
+
+// Keeps the loaded track (e.g. the sample, or one restored from before v0.10)
+// in the library too.
+$('keep-track-btn').addEventListener('click', async () => {
+    if (!track) return toast('No track loaded.');
+    try {
+        await saveLibraryEntry({ id: `track-${Date.now()}`, name: track.name || 'Track', points: track.points, eleInfo: track.eleInfo, savedAt: Date.now() });
+        renderLibrary();
+        toast(`Added “${track.name || 'Track'}” to the Track Library.`);
+    } catch (err) {
+        console.error('Saving track failed:', err);
+        toast('Could not save the track on this device.', 5000);
+    }
+});
+
+// The Track Library's lines about the loaded track and the current recording.
+function renderLibraryStatus() {
+    setText($('lib-loaded'), track ? `${track.name || 'Track'} · ${formatDistance(track.total)}` : 'None: load one above, or import a GPX.');
+    const recorded = path.pointCount >= 2;
+    setText($('lib-recording'), recorded
+        ? `Walked ${formatDistance(motion.walked)} · moving ${formatDuration(motion.movingMs)}` +
+          `${track ? ` along “${track.name || 'the track'}”` : ' (free recording)'}` +
+          `${hike.running ? ' · recording now' : ''}${walkUnsaved() ? ' · not exported or saved yet' : ' · saved'}`
+        : 'Nothing recorded. Go › Start records a walk.');
+}
 
 async function renderLibrary() {
     const list = $('library');
@@ -1362,8 +1460,8 @@ async function renderLibrary() {
             if (!await keepRecording(`Loading “${entry.name}”`)) return;
             await setTrack(entry.name, entry.points, { eleInfo: entry.eleInfo });
             resetTrip();
-            $('settings').close();
-            toast(`Loaded ${formatDistance(track.total)} track.`);
+            showTab('go');
+            toast(`Loaded ${formatDistance(track.total)} track: Start to follow it.`);
         });
         const edit = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit' });
         edit.addEventListener('click', () => openPlanner(entry));
@@ -1377,18 +1475,18 @@ async function renderLibrary() {
         return row;
     }));
     $('library-empty').hidden = entries.length > 0;
+    renderLibraryStatus();
 }
 
 $('fill-ele-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
     if (!track.eleInfo.missing) return toast('All points already have elevations.');
     fillTrackElevations();
-    $('settings').close();
 });
 
 $('clear-btn').addEventListener('click', () => {
     if (!track) return toast('No track loaded.');
-    if (confirm('Remove the current track from this device?')) clearTrack();
+    if (confirm(`Unload “${track.name || 'the track'}”? Copies in the Track Library are kept.`)) clearTrack();
 });
 
 $('sample-btn').addEventListener('click', async () => {
@@ -1399,7 +1497,7 @@ $('sample-btn').addEventListener('click', async () => {
         if (!await keepRecording('Loading the sample track')) return;
         await setTrack(name, points);
         resetTrip();
-        $('settings').close();
+        showTab('go');
     } catch (err) {
         console.error('Sample load failed:', err);
         toast('Could not load the sample track.');
@@ -1417,9 +1515,123 @@ $('test-loop-btn').addEventListener('click', async () => {
         const points = squareLoop({ lat: pos.coords.latitude, lon: pos.coords.longitude }, 200);
         setTrack('Test loop', points, { temporary: true });
         resetTrip();
-        $('settings').close();
+        showTab('go');
         toast('Test loop created: north, east, south, back to start.');
     }, onGeoError, { enableHighAccuracy: true, timeout: 20_000 });
+});
+
+// ---------- Tabs: Explore, Plan, Go, Track Library, Settings ----------
+
+const TABS = ['explore', 'plan', 'go', 'library', 'settings'];
+let currentTab = null;
+
+// Each part of the screen lists in data-tabs the tabs it belongs to. The hike
+// (GPS, recording, alerts) carries on whatever tab is shown.
+// Resolves false if leaving Plan was cancelled (unsaved changes kept).
+function showTab(tab) {
+    if (!TABS.includes(tab)) tab = 'explore';
+    if (tab === currentTab) return true;
+    if (currentTab === 'plan' && !planner.close()) return false;
+    currentTab = tab;
+    document.body.dataset.tab = tab;
+    for (const el of document.querySelectorAll('[data-tabs]')) {
+        el.classList.toggle('tab-off', !el.dataset.tabs.split(' ').includes(tab));
+    }
+    for (const b of document.querySelectorAll('#tabbar button')) {
+        b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false');
+    }
+    $('layers-panel').hidden = true;
+    if (tab === 'library') renderLibrary();
+    if (tab === 'settings') fillSettings();
+    if (tab !== 'plan') {
+        settings.tab = tab;
+        saveSettings();
+    }
+    updateChrome();
+    return true;
+}
+
+// The action bar shows only when the tab has actions (Plan: once the planner is open).
+function updateChrome() {
+    const actions = currentTab === 'explore' || currentTab === 'go' || (currentTab === 'plan' && planner.active);
+    $('toolbar').hidden = !actions;
+    $('edit-loaded-btn').disabled = !track;
+    updateLayout();
+}
+
+for (const b of document.querySelectorAll('#tabbar button')) {
+    b.addEventListener('click', () => showTab(b.dataset.tab));
+}
+
+// ---------- Explore: place search, locate me, layers ----------
+
+// On Enter (or the Search button) only, never while typing: each search uses
+// the shared daily quota of the relay's key.
+let searching = false;
+$('search-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = $('search-input').value.trim();
+    if (!text || searching) return;
+    $('search-input').blur(); // closes the iPhone keyboard
+    searching = true;
+    showSearchResults('Searching…', []);
+    const r = await searchPlaces(text, view.getCenter()); // nearby places first
+    searching = false;
+    if (!r.ok) {
+        if (r.detail) console.warn('Place search:', r.reason, r.detail);
+        return showSearchResults(r.reason === 'limit'
+            ? 'Search limit reached for now: try again in a minute (or tomorrow).'
+            : 'Place search unavailable right now (offline?).', []);
+    }
+    showSearchResults(r.places.length ? '' : `Nothing found for “${text}”.`, r.places);
+});
+
+function showSearchResults(message, places) {
+    $('search-results').hidden = false;
+    setText($('search-message'), message);
+    $('search-list').replaceChildren(...places.map((place) => {
+        const b = Object.assign(document.createElement('button'), { type: 'button', textContent: place.label });
+        if (place.kind) b.append(Object.assign(document.createElement('small'), { textContent: place.kind }));
+        b.addEventListener('click', () => {
+            $('search-results').hidden = true;
+            view.showPlace(place);
+        });
+        return b;
+    }));
+    setText($('search-credit'), places.length ? GEOCODER_ATTRIBUTION : '');
+}
+
+// Emptying the field removes the list and the pin; tapping the map hides the list.
+$('search-input').addEventListener('input', (e) => {
+    if (e.target.value) return;
+    $('search-results').hidden = true;
+    view.clearPlace();
+});
+view.on('click', () => {
+    $('search-results').hidden = true;
+    $('layers-panel').hidden = true;
+});
+if (!searchAvailable()) $('search-input').placeholder = 'Place search is not set up';
+
+// One position request (not the hike's GPS): fly there and show the dot.
+$('locate-btn').addEventListener('click', () => {
+    if (hike.running && view.centerOnPosition()) return;
+    if (!('geolocation' in navigator)) return toast('This browser cannot access GPS.');
+    toast('Finding your position…', 15_000);
+    navigator.geolocation.getCurrentPosition((pos) => {
+        const fix = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy };
+        if (!hike.running) view.showPosition(fix);
+        view.jumpTo(fix);
+        toast(`You are here (±${formatMetres(fix.acc)}).`);
+    }, (err) => {
+        toast(err.code === err.PERMISSION_DENIED
+            ? 'Location is blocked. On iPhone: Settings › Privacy & Security › Location Services › Safari Websites › "While Using the App".'
+            : 'Could not get your position. Try again outside, away from buildings.', 8000);
+    }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 });
+});
+
+$('layers-btn').addEventListener('click', () => {
+    $('layers-panel').hidden = !$('layers-panel').hidden;
 });
 
 // ---------- Service worker and updates ----------
@@ -1474,7 +1686,8 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- Start-up ----------
 
-if (SIMULATE) toast('Simulated GPS is on: Start replays the track. Turn it off in Settings › Testing.', 5000);
+if (SIMULATE) toast('Simulated GPS is on: Go › Start replays the track. Turn it off in Settings › Testing.', 5000);
+showTab(settings.tab === 'plan' ? 'explore' : settings.tab);
 renderTrackStatus();
 renderStats();
 renderWalk();

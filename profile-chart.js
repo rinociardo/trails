@@ -1,9 +1,10 @@
-// Elevation profile: distance (km) across, elevation (m) up, with a marker at
+// Elevation profile: distance (km or mi) across, elevation (m or ft) up, with a marker at
 // the current position and a finger-drag crosshair to read any point.
 // The profile is drawn once per track; moving the marker only shifts two
 // small elements, so live updates cost almost nothing.
 
 import { profileAt } from './elevation.js';
+import { makeUnits } from './units.js';
 
 const PAD = { left: 34, right: 6, top: 6, bottom: 16 };
 
@@ -16,7 +17,8 @@ function niceStep(range, targetTicks) {
     return 10 * mag;
 }
 
-export function createProfileChart(root) {
+// getUnits(): the current units (see units.js); metric if not given.
+export function createProfileChart(root, { getUnits = () => makeUnits('metric') } = {}) {
     const canvas = root.querySelector('canvas');
     const line = root.querySelector('.profile-line');
     const dot = root.querySelector('.profile-dot');
@@ -48,12 +50,17 @@ export function createProfileChart(root) {
         const css = getComputedStyle(document.documentElement);
         const color = (name) => css.getPropertyValue(name).trim();
 
+        // Axes in the chosen units: lo/hi and the ticks are in m or ft.
+        const units = getUnits();
+        const { lengthM, distanceM, distanceUnit } = units;
+        const eleLabel = (e) => `${Math.round(e).toLocaleString('en-US')} ${units.lengthUnit}`;
         // Keep at least 50 m of vertical range so flat tracks don't look dramatic.
-        let lo = profile.minEle, hi = profile.maxEle;
-        if (hi - lo < 50) {
+        let lo = profile.minEle / lengthM, hi = profile.maxEle / lengthM;
+        const minRange = 50 / lengthM;
+        if (hi - lo < minRange) {
             const mid = (hi + lo) / 2;
-            lo = mid - 25;
-            hi = mid + 25;
+            lo = mid - minRange / 2;
+            hi = mid + minRange / 2;
         }
         const yStep = niceStep(hi - lo, 2);
         lo = Math.floor(lo / yStep) * yStep;
@@ -61,10 +68,10 @@ export function createProfileChart(root) {
 
         // Room for the widest elevation label ("1300 m" was cut to "300 m" at a fixed 34 px).
         ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-        PAD.left = Math.max(34, Math.ceil(Math.max(...[lo, hi].map((e) => ctx.measureText(`${Math.round(e)} m`).width))) + 8);
+        PAD.left = Math.max(34, Math.ceil(Math.max(...[lo, hi].map((e) => ctx.measureText(eleLabel(e)).width))) + 8);
         const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
         const x = (d) => PAD.left + (d / track.total) * plotW;
-        const y = (e) => PAD.top + (1 - (e - lo) / (hi - lo)) * plotH;
+        const y = (e) => PAD.top + (1 - (e / lengthM - lo) / (hi - lo)) * plotH; // e in metres
         scale = { x, y, plotH };
 
         // Recessive grid and labels.
@@ -76,18 +83,21 @@ export function createProfileChart(root) {
         ctx.textBaseline = 'middle';
         for (let e = lo; e <= hi + 1e-6; e += yStep) {
             ctx.beginPath();
-            ctx.moveTo(PAD.left, Math.round(y(e)) + 0.5);
-            ctx.lineTo(w - PAD.right, Math.round(y(e)) + 0.5);
+            const yy = y(e * lengthM);
+            ctx.moveTo(PAD.left, Math.round(yy) + 0.5);
+            ctx.lineTo(w - PAD.right, Math.round(yy) + 0.5);
             ctx.stroke();
-            ctx.fillText(`${Math.round(e)} m`, PAD.left - 4, y(e));
+            ctx.fillText(eleLabel(e), PAD.left - 4, yy);
         }
-        const km = track.total / 1000;
+        const km = track.total / distanceM; // in km or mi
         const xStep = niceStep(km, 4);
+        // Enough decimals that short tracks don't repeat a label (0.05, 0.1, 0.15…).
+        const decimals = Math.min(3, Math.max(1, -Math.floor(Math.log10(xStep) + 1e-9) + (Number.isInteger(xStep * 10 ** -Math.floor(Math.log10(xStep))) ? 0 : 1)));
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         for (let k = 0; k <= km + 1e-6; k += xStep) {
-            const label = `${Number.isInteger(k) ? k : k.toFixed(1)}${k === 0 ? '' : ' km'}`;
-            ctx.fillText(label, Math.min(Math.max(x(k * 1000), PAD.left + 6), w - PAD.right - 14), h - PAD.bottom + 3);
+            const label = `${+k.toFixed(decimals)}${k === 0 ? '' : ` ${distanceUnit}`}`;
+            ctx.fillText(label, Math.min(Math.max(x(k * distanceM), PAD.left + 6), w - PAD.right - 14), h - PAD.bottom + 3);
         }
 
         // Area and 2px line.
@@ -134,7 +144,8 @@ export function createProfileChart(root) {
         cursor.style.left = `${px}px`;
         cursor.style.top = `${PAD.top}px`;
         cursor.style.height = `${scale.plotH}px`;
-        tip.textContent = `${(along / 1000).toFixed(2)} km · ${Math.round(at.ele)} m`;
+        const units = getUnits();
+        tip.textContent = `${(along / units.distanceM).toFixed(2)} ${units.distanceUnit} · ${units.length(at.ele)}`;
         const tipW = tip.offsetWidth;
         tip.style.left = `${Math.max(0, Math.min(rect.width - tipW, px - tipW / 2))}px`;
     }
@@ -166,6 +177,8 @@ export function createProfileChart(root) {
             hideCursor();
             draw();
         },
+        // Units changed.
+        redraw: draw,
         setPosition(along) {
             markerAlong = along;
             placeMarker();

@@ -31,7 +31,7 @@
             --danger: #c62828;
             --warn: #f4a259;
             --ok: #8fd19e;
-            --toolbar-h: 64px;
+            --tab-active: #2b4c3f;
             --profile-line: #2b6a52;
             --profile-fill: rgba(43, 106, 82, .16);
             --profile-grid: #e3e8e5;
@@ -47,6 +47,7 @@
                 --profile-fill: rgba(124, 196, 164, .18);
                 --profile-grid: #2a3530;
                 --profile-marker: #6aa1ff;
+                --tab-active: #8fd19e;
             }
         }
         * { box-sizing: border-box; }
@@ -62,20 +63,23 @@
             -webkit-tap-highlight-color: transparent;
         }
         button, select, input { font: inherit; touch-action: manipulation; }
-        /* The map sits between the stats bar and the toolbar, so nothing covers
-           the OSM attribution and "centre" means the visible middle. */
+        /* The map sits between the top bar and the trip panel + bottom bar, so
+           nothing covers the OSM attribution and "centre" means the visible middle.
+           --bottom-h (actions + tab bar) and --panel-h are measured in app.js. */
         #map {
             position: fixed;
             left: 0; right: 0;
             top: var(--stats-h, 0px);
-            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px));
+            bottom: calc(var(--bottom-h, 120px) + var(--panel-h, 0px));
         }
+        /* ---- Tabs: each part lists in data-tabs where it shows; app.js adds .tab-off elsewhere ---- */
+        .tab-off { display: none !important; }
 
         /* ---- Trip panel: done/remaining table, elevation profile, walked stats ---- */
         #trip-panel {
             position: fixed;
             left: 0; right: 0;
-            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom));
+            bottom: var(--bottom-h, 120px);
             z-index: 1000;
             background: var(--panel);
             color: var(--panel-text);
@@ -104,12 +108,18 @@
             font-size: 12px; color: var(--panel-muted); font-variant-numeric: tabular-nums;
         }
         .walk-row b { color: var(--panel-text); font-weight: 600; }
-        .walk-row .link-btn {
-            margin-left: auto; padding: 0; border: 0; background: none;
+        .link-btn {
+            padding: 0; border: 0; background: none;
             font: inherit; font-weight: 600; color: var(--profile-marker);
         }
+        .link-btn.danger { color: var(--danger); }
+        .walk-row .link-btn { margin-left: auto; }
+        .track-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 12px; }
         .track-info { margin-top: 4px; font-size: 11px; color: var(--panel-muted); }
         .library-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
+        .library-row button { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text); }
+        .library-row button.danger { color: var(--danger); }
+        .lib-line { margin: 0 0 8px; font-size: 14px; }
         .library-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .credits { margin: 4px 0 0; padding-left: 18px; font-size: 11px; color: var(--panel-muted); }
 
@@ -197,7 +207,7 @@
         .banner {
             position: fixed;
             left: 12px; right: 12px;
-            z-index: 1001;
+            z-index: 1600; /* above the Track Library and Settings pages too */
             padding: 12px 16px;
             border-radius: 12px;
             font-weight: 700;
@@ -211,7 +221,7 @@
             text-align: center;
         }
         #update-banner {
-            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px) + 36px);
+            bottom: calc(var(--bottom-h, 120px) + var(--panel-h, 0px) + 36px);
             background: var(--panel);
             color: var(--panel-text);
             display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -223,9 +233,9 @@
         #toast {
             position: fixed;
             left: 50%;
-            bottom: calc(var(--toolbar-h) + env(safe-area-inset-bottom) + var(--panel-h, 0px) + 36px);
+            bottom: calc(var(--bottom-h, 120px) + var(--panel-h, 0px) + 36px);
             transform: translateX(-50%);
-            z-index: 1002;
+            z-index: 1600;
             pointer-events: none; /* never blocks a tap on the map below */
             max-width: calc(100% - 32px);
             padding: 10px 16px;
@@ -241,7 +251,6 @@
         /* Track planner: its own top bar and toolbar; the panel keeps only the profile. */
         body:not(.plan-mode) .plan-only, body.plan-mode .plan-hide { display: none !important; }
         body.plan-mode #profile { display: block !important; }
-        body.plan-mode #toolbar { grid-template-columns: repeat(5, 1fr); }
         #plan-type { font-size: 13px; }
         #plan-type.active { border-color: var(--profile-marker); color: var(--profile-marker); }
         .plan-bar { display: flex; flex-direction: column; gap: 4px; }
@@ -269,18 +278,96 @@
         }
         #plan-messages .plan-warning { color: #ffd8a8; font-weight: 600; }
 
-        /* ---- Bottom toolbar ---- */
-        #toolbar {
+        /* ---- Bottom: the tab's actions above the tab bar ---- */
+        #bottom {
             position: fixed;
             left: 0; right: 0; bottom: 0;
             z-index: 1000;
-            height: calc(var(--toolbar-h) + env(safe-area-inset-bottom));
-            padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 6px;
             background: var(--panel);
             border-top: 1px solid var(--panel-border);
+        }
+        #toolbar { display: flex; gap: 6px; height: 60px; padding: 8px 8px 4px; }
+        #toolbar .tool { flex: 1; min-width: 0; }
+        #tabbar {
+            display: grid; grid-template-columns: repeat(5, 1fr);
+            padding: 2px 4px env(safe-area-inset-bottom);
+        }
+        #tabbar button {
+            position: relative;
+            display: flex; flex-direction: column; align-items: center; gap: 2px;
+            padding: 6px 0 6px; border: 0; background: none;
+            color: var(--panel-muted); font-size: 10px; font-weight: 600; line-height: 1.1;
+        }
+        #tabbar button[aria-current="page"] { color: var(--tab-active); }
+        #tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+        .tab-dot { position: absolute; top: 4px; left: calc(50% + 8px); width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+        /* ---- Explore: search bar and results ---- */
+        .search-bar { display: flex; gap: 6px; }
+        .search-bar input {
+            flex: 1; min-width: 0;
+            font-size: 16px; /* 16px or more: iPhone doesn't zoom into the field */
+            padding: 7px 10px; border-radius: 8px; border: 0;
+            background: rgba(255,255,255,.95); color: #1b1f1d;
+        }
+        .search-bar button {
+            padding: 7px 12px; border-radius: 8px; border: 1px solid var(--on-brand-muted);
+            background: transparent; color: var(--on-brand); font-weight: 600;
+        }
+        #search-results {
+            position: fixed;
+            top: calc(var(--stats-h, 0px) + 6px);
+            left: 8px; right: 8px;
+            z-index: 1050;
+            max-height: 55%;
+            overflow-y: auto;
+            border-radius: 12px;
+            background: var(--panel); color: var(--panel-text);
+            box-shadow: 0 4px 16px rgba(0,0,0,.3);
+        }
+        #search-message:not(:empty) { padding: 10px 14px; font-size: 14px; color: var(--panel-muted); }
+        #search-list button {
+            display: block; width: 100%; padding: 10px 14px;
+            border: 0; border-top: 1px solid var(--panel-border); background: none;
+            color: inherit; text-align: left; font-size: 15px;
+        }
+        #search-list button:first-child { border-top: 0; }
+        #search-list small { display: block; color: var(--panel-muted); font-size: 12px; }
+        .search-credit { padding: 6px 14px 8px; font-size: 10px; color: var(--panel-muted); }
+        /* ---- Cards floating over the map (Plan start, Layers) ---- */
+        .card {
+            position: fixed; left: 8px; right: 8px; z-index: 1050;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: var(--panel); color: var(--panel-text);
+            box-shadow: 0 4px 16px rgba(0,0,0,.25);
+        }
+        .card h3 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--panel-muted); }
+        #plan-start { top: calc(var(--stats-h, 0px) + 8px); display: flex; flex-direction: column; gap: 8px; }
+        #plan-start button {
+            padding: 11px; border-radius: 10px; border: 1px solid var(--panel-border);
+            background: var(--panel); color: var(--panel-text); font-weight: 600;
+        }
+        #plan-start button:disabled { opacity: .5; }
+        #plan-start .primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+        #layers-panel { bottom: calc(var(--bottom-h, 120px) + var(--panel-h, 0px) + 8px); }
+        /* ---- Track Library and Settings: pages over the map ---- */
+        .page {
+            position: fixed;
+            top: var(--stats-h, 0px); bottom: var(--bottom-h, 120px);
+            left: 0; right: 0;
+            z-index: 1100;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 4px max(16px, env(safe-area-inset-left)) 24px;
+            background: var(--panel); color: var(--panel-text);
+            -webkit-user-select: text; user-select: text;
+        }
+        .page > :first-child { margin-top: 12px; }
+        .page-title { margin: 2px 0; font-size: 20px; color: var(--on-brand); }
+        label.button {
+            display: flex; align-items: center; justify-content: center;
+            padding: 10px; border-radius: 10px; border: 1px solid var(--panel-border);
+            background: var(--brand); color: var(--on-brand); font-weight: 600;
         }
         .tool {
             display: flex; align-items: center; justify-content: center;
@@ -325,7 +412,7 @@
         dialog::backdrop { background: rgba(0,0,0,.45); }
         dialog form { padding: 16px 18px 18px; }
         dialog h2 { margin: 0 0 12px; font-size: 18px; }
-        dialog h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--panel-muted); }
+        dialog h3, .page h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--panel-muted); }
         .field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
         .field input[type=number] { width: 90px; padding: 6px 8px; }
         .field input, .field select {
@@ -349,16 +436,23 @@
         .hint { font-size: 12px; color: var(--panel-muted); margin: 4px 0 0; }
     </style>
 </head>
-<body>
+<body data-tab="explore">
     <div id="map"></div>
 
+    <!-- Top bar: its content depends on the tab (data-tabs lists where each part shows). -->
     <header id="stats">
-        <div class="plan-bar plan-only">
+        <form class="search-bar" id="search-form" data-tabs="explore" role="search">
+            <input type="search" id="search-input" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+                   placeholder="Town, peak, park, address…" aria-label="Search a place">
+            <button type="submit" id="search-btn">Search</button>
+        </form>
+        <h1 class="page-title plan-hide" data-tabs="plan">Plan</h1>
+        <div class="plan-bar plan-only" data-tabs="plan">
             <input type="text" id="plan-name" aria-label="Track name" placeholder="Track name" autocomplete="off">
             <div class="plan-hint">Tap the map to add a point · drag a point to move it · tap it to delete · drag a small circle to insert a point, tap it to switch trail/straight</div>
             <div class="plan-credit" id="plan-credit"></div>
         </div>
-        <div class="stat-row plan-hide">
+        <div class="stat-row" data-tabs="go">
             <div class="stat track-only"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
             <div class="stat track-only"><span class="stat-label">Remaining</span><span class="stat-value" id="stat-remaining">–</span></div>
             <div class="stat track-only"><span class="stat-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
@@ -366,22 +460,47 @@
             <div class="stat free-only"><span class="stat-label">Moving</span><span class="stat-value" id="stat-moving">–</span></div>
             <div class="stat free-only"><span class="stat-label">Avg speed</span><span class="stat-value" id="stat-speed">–</span></div>
         </div>
-        <div class="status-row plan-hide">
+        <div class="status-row" data-tabs="go">
             <span id="track-status">No track</span>
             <span id="gps-status">GPS off</span>
             <span id="motion-status" hidden></span>
             <button type="button" id="wake-status" hidden></button>
         </div>
+        <h1 class="page-title" data-tabs="library">Track Library</h1>
+        <h1 class="page-title" data-tabs="settings">Settings</h1>
     </header>
 
-    <div id="debug-box" hidden></div>
+    <div id="debug-box" data-tabs="go" hidden></div>
 
-    <div id="plan-messages" class="plan-only">
+    <!-- Explore: search results (a short list; tap one to fly there). -->
+    <div id="search-results" data-tabs="explore" hidden>
+        <div id="search-message"></div>
+        <div id="search-list"></div>
+        <div class="search-credit" id="search-credit"></div>
+    </div>
+
+    <!-- Plan: what to plan (shown until the planner is open). -->
+    <div id="plan-start" class="card plan-hide" data-tabs="plan">
+        <button type="button" class="primary-action" id="new-track-btn">Draw a new track</button>
+        <button type="button" id="edit-loaded-btn">Edit the loaded track</button>
+        <button type="button" disabled>From → To <small>(planned)</small></button>
+        <button type="button" disabled>Loop generator <small>(planned)</small></button>
+        <p class="hint" id="plan-start-hint">To change a saved track: Track Library › Edit. Editing a recorded walk or a GPX saves a new track and keeps the original.</p>
+    </div>
+
+    <div id="plan-messages" class="plan-only" data-tabs="plan">
         <div class="plan-notice" id="plan-notice" hidden></div>
         <div class="plan-warning" id="plan-warning" hidden></div>
     </div>
 
-    <section id="trip-panel" aria-label="Trip">
+    <!-- Explore: map layers. -->
+    <div id="layers-panel" class="card" data-tabs="explore" hidden>
+        <h3>Map</h3>
+        <label class="field">OpenStreetMap (standard) <input type="radio" name="basemap" checked></label>
+        <p class="hint">Planned: a topographic map, a hiking-trail overlay and mobile coverage. The map needs a connection (offline maps come with Stage 3).</p>
+    </div>
+
+    <section id="trip-panel" aria-label="Trip" data-tabs="explore plan go">
         <button type="button" id="trip-toggle" aria-expanded="true">
             <span id="trip-summary">No track loaded</span>
             <span class="chevron" aria-hidden="true">▾</span>
@@ -406,13 +525,143 @@
                 <div class="profile-empty" hidden>No elevation data in this track</div>
             </div>
             <div class="track-info track-only plan-hide" id="track-info"></div>
-            <div class="walk-row plan-hide">
+            <div class="track-actions track-only plan-hide" data-tabs="go">
+                <button type="button" class="link-btn" id="reverse-btn">Reverse direction</button>
+                <button type="button" class="link-btn" id="fill-ele-btn">Fill elevations</button>
+                <button type="button" class="link-btn danger" id="clear-btn">Unload track</button>
+            </div>
+            <div class="walk-row plan-hide" data-tabs="go">
                 <span>Walked <b id="w-walked">–</b></span>
                 <span>Moving <b id="w-moving">–</b></span>
                 <span>Stopped <b id="w-stopped">–</b></span>
                 <span>Avg <b id="w-speed">–</b></span>
                 <button type="button" class="link-btn" id="save-walk-btn" hidden>Save as track</button>
             </div>
+        </div>
+    </section>
+
+    <!-- Track Library: saved tracks and walks, import, export, save as track. -->
+    <section class="page" id="library-page" data-tabs="library">
+        <h3>Saved tracks and walks</h3>
+        <div id="library"></div>
+        <p class="hint" id="library-empty">None yet. Import a GPX, draw a track in Plan, or save a recorded walk.</p>
+        <div class="actions">
+            <label class="button" for="gpx-input">Import GPX</label>
+            <button type="button" id="lib-new-track-btn">New track</button>
+        </div>
+        <p class="hint">Import adds the file here and loads it to follow in Go. "Edit" opens a saved track in Plan; editing a recorded walk or a GPX saves a new track and keeps the original.</p>
+
+        <h3>Loaded track</h3>
+        <p class="lib-line" id="lib-loaded">None</p>
+        <div class="actions">
+            <button type="button" id="export-track-btn">Export track</button>
+            <button type="button" id="keep-track-btn">Add to library</button>
+        </div>
+
+        <h3>Current recording</h3>
+        <p class="lib-line" id="lib-recording">Nothing recorded</p>
+        <div class="actions">
+            <button type="button" id="export-hike-btn">Export my hike</button>
+            <button type="button" id="save-walk-lib-btn">Save as track</button>
+            <button type="button" class="danger" id="reset-trip-btn">Reset walked/time</button>
+        </div>
+        <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it; a free recording, made with no track loaded, has none and says so in the file). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file. GPX files always store metres (the GPX standard); the description inside gives the totals in your units.</p>
+    </section>
+
+    <!-- Settings: preferences only. -->
+    <section class="page" id="settings-page" data-tabs="settings">
+        <h3>Units</h3>
+        <label class="field">Distances and elevations
+            <select id="set-units">
+                <option value="metric">km and m</option>
+                <option value="imperial">miles and feet</option>
+            </select>
+        </label>
+
+        <h3>Alerts</h3>
+        <label class="field"><span>Off-track distance (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-offtrack" inputmode="numeric">
+        </label>
+        <label class="field"><span>…on straight (cross-country) segments (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-offtrack-straight" inputmode="numeric">
+        </label>
+        <label class="field">Sound with off-track alert
+            <input type="checkbox" id="set-sound">
+        </label>
+        <p class="hint">Straight segments of a planned track have no path to follow, so you may stray further from the line there.</p>
+
+        <h3>Screen and battery</h3>
+        <label class="field">Auto-dim while hiking
+            <select id="set-autodim">
+                <option value="0">Never</option>
+                <option value="30">After 30 s</option>
+                <option value="60">After 1 min</option>
+                <option value="120">After 2 min</option>
+            </select>
+        </label>
+        <p class="hint">Dim shows a black screen, which uses very little power on the iPhone's OLED display. The map stops updating while dimmed. While hiking the app keeps the screen awake with Wake Lock (Go shows "Screen awake"; this device: <span id="info-wakelock-inline">–</span>).</p>
+
+        <h3>GPS smoothing</h3>
+        <label class="field"><span>Ignore fixes worse than (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-maxacc" inputmode="numeric">
+        </label>
+        <label class="field">Average the last (fixes)
+            <input type="number" id="set-window" min="1" max="15" step="1" inputmode="numeric">
+        </label>
+        <p class="hint">More fixes give a steadier position but it trails behind you: about half a second per fix (5 fixes ≈ 2 s ≈ 3 m at walking pace).</p>
+
+        <h3>Stop detection</h3>
+        <label class="field"><span>Stopped when within (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-stopradius" inputmode="numeric">
+        </label>
+        <label class="field">…for at least (seconds)
+            <input type="number" id="set-stoptime" min="10" max="300" step="5" inputmode="numeric">
+        </label>
+        <label class="field"><span>…unless the track climbed more than (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-stopclimb" inputmode="decimal">
+        </label>
+        <p class="hint">The distance grows to the GPS accuracy when that is worse. The climb check stops slow, steep climbs from counting as stops: 3 m (10 ft) in 30 s is a climbing rate of 360 m (1,180 ft) an hour. Lower it if slow climbs still show "Stopped"; it needs a track with elevations. The debug view's "Climb" line shows the value over the last window, to help you choose.</p>
+
+        <h3>Elevation</h3>
+        <label class="field"><span>Ignore climbs/drops smaller than (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-elethreshold" inputmode="numeric">
+        </label>
+        <p class="hint">Removes small ups and downs from total ascent/descent. Compare with Maps 3D PRO on the same GPX to tune it. Tracks without elevations (free recordings, GPX files without them, the test loop) get them from a DEM (Digital Elevation Model) when online; Go › Fill elevations retries after being offline.</p>
+
+        <h3>Planning</h3>
+        <label class="field">Warn when a straight segment crosses slopes steeper than (degrees)
+            <input type="number" id="set-steep" min="10" max="60" step="1" inputmode="numeric">
+        </label>
+        <p class="hint">Slopes are shown in degrees and as a grade: 15° = 27%, 20° = 36%, 30° = 58%, 45° = 100%. Trail segments follow footpaths using openrouteservice (<code>foot-hiking</code>), through the Trails relay: nothing to set up. When routing is unavailable (offline) or its daily limit is reached, segments are drawn straight.</p>
+
+        <h3>Data sources</h3>
+        <p class="hint">The map credits are on the map itself. <span id="router-credit"></span>. <span id="geocoder-credit"></span>. Elevations (DEM):</p>
+        <ul class="credits" id="dem-credits"></ul>
+
+        <h3>Testing</h3>
+        <label class="field">Debug view (raw vs smoothed GPS)
+            <input type="checkbox" id="set-debug">
+        </label>
+        <label class="field">Simulated GPS (replays the track, or a test walk)
+            <input type="checkbox" id="set-simulate">
+        </label>
+        <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. With no track loaded it walks a 2 km square from your last recorded point (or the map centre), to test free recording. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
+        <div class="actions">
+            <button type="button" id="test-loop-btn">Test loop here</button>
+            <button type="button" id="sample-btn">Load sample track</button>
+        </div>
+        <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test. It is not kept when you close the app, unless a hike with it is in progress.</p>
+
+        <h3>This device</h3>
+        <dl class="info">
+            <dt>Running as</dt><dd id="info-mode">–</dd>
+            <dt>Screen wake lock</dt><dd id="info-wakelock">–</dd>
+            <dt>Vibration</dt><dd id="info-vibrate">–</dd>
+            <dt>Storage</dt><dd id="info-storage">–</dd>
+            <dt>App version</dt><dd id="info-version">–</dd>
+        </dl>
+        <div class="actions" style="margin-top: 10px;">
+            <button type="button" id="update-btn">Check for update</button>
         </div>
     </section>
 
@@ -423,18 +672,33 @@
     </div>
     <div id="toast" role="status" hidden></div>
 
-    <nav id="toolbar">
-        <label class="tool plan-hide" for="gpx-input">Open GPX</label>
-        <button type="button" class="tool primary plan-hide" id="start-btn">Start</button>
-        <button type="button" class="tool plan-hide" id="center-btn">Center</button>
-        <button type="button" class="tool plan-hide" id="dim-btn">Dim</button>
-        <button type="button" class="tool plan-hide" id="settings-btn">Settings</button>
-        <button type="button" class="tool plan-only" id="plan-undo">Undo</button>
-        <button type="button" class="tool plan-only" id="plan-type">Next: Trail</button>
-        <button type="button" class="tool plan-only" id="plan-save">Save</button>
-        <button type="button" class="tool plan-only" id="plan-export">Export</button>
-        <button type="button" class="tool primary plan-only" id="plan-done">Done</button>
-    </nav>
+    <div id="bottom">
+        <!-- Actions of the current tab -->
+        <nav id="toolbar">
+            <button type="button" class="tool" id="locate-btn" data-tabs="explore">Locate me</button>
+            <button type="button" class="tool" id="layers-btn" data-tabs="explore">Layers</button>
+            <button type="button" class="tool primary" id="start-btn" data-tabs="go">Start</button>
+            <button type="button" class="tool" id="center-btn" data-tabs="go">Center</button>
+            <button type="button" class="tool" id="dim-btn" data-tabs="go">Dim</button>
+            <button type="button" class="tool plan-only" id="plan-undo" data-tabs="plan">Undo</button>
+            <button type="button" class="tool plan-only" id="plan-type" data-tabs="plan">Next: Trail</button>
+            <button type="button" class="tool plan-only" id="plan-save" data-tabs="plan">Save</button>
+            <button type="button" class="tool plan-only" id="plan-export" data-tabs="plan">Export</button>
+            <button type="button" class="tool primary plan-only" id="plan-done" data-tabs="plan">Done</button>
+        </nav>
+        <nav id="tabbar" aria-label="Sections">
+            <button type="button" data-tab="explore" aria-label="Explore">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Explore</button>
+            <button type="button" data-tab="plan" aria-label="Plan">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M8 17c5-1 2-7 8-10"/></svg>Plan</button>
+            <button type="button" data-tab="go" aria-label="Go">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>Go<span class="tab-dot" id="go-dot" hidden></span></button>
+            <button type="button" data-tab="library" aria-label="Track Library">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16.5 5.5l3.5 1-3.5 13-3.4-.9"/></svg>Track Library</button>
+            <button type="button" data-tab="settings" aria-label="Settings">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Settings</button>
+        </nav>
+    </div>
     <!-- No "accept" filter: iOS greys out .gpx files when one is set -->
     <input type="file" id="gpx-input" hidden>
 
@@ -449,126 +713,6 @@
         <div class="dim-label" id="dim-motion"></div>
         <div id="dim-hint">Tap anywhere to show the map</div>
     </div>
-
-    <dialog id="settings">
-        <form method="dialog">
-            <h2>Settings</h2>
-
-            <h3>Alerts</h3>
-            <label class="field">Off-track distance (metres)
-                <input type="number" id="set-offtrack" min="10" max="500" step="5" inputmode="numeric">
-            </label>
-            <label class="field">…on straight (cross-country) segments (metres)
-                <input type="number" id="set-offtrack-straight" min="10" max="1000" step="10" inputmode="numeric">
-            </label>
-            <label class="field">Sound with off-track alert
-                <input type="checkbox" id="set-sound">
-            </label>
-            <p class="hint">Straight segments of a planned track have no path to follow, so you may stray further from the line there.</p>
-
-            <h3>Battery</h3>
-            <label class="field">Auto-dim while hiking
-                <select id="set-autodim">
-                    <option value="0">Never</option>
-                    <option value="30">After 30 s</option>
-                    <option value="60">After 1 min</option>
-                    <option value="120">After 2 min</option>
-                </select>
-            </label>
-            <p class="hint">Dim shows a black screen, which uses very little power on the iPhone's OLED display. The map stops updating while dimmed.</p>
-
-            <h3>GPS smoothing</h3>
-            <label class="field">Ignore fixes worse than (metres)
-                <input type="number" id="set-maxacc" min="5" max="100" step="5" inputmode="numeric">
-            </label>
-            <label class="field">Average the last (fixes)
-                <input type="number" id="set-window" min="1" max="15" step="1" inputmode="numeric">
-            </label>
-            <p class="hint">More fixes give a steadier position but it trails behind you: about half a second per fix (5 fixes ≈ 2 s ≈ 3 m at walking pace).</p>
-
-            <h3>Stop detection</h3>
-            <label class="field">Stopped when within (metres)
-                <input type="number" id="set-stopradius" min="5" max="50" step="1" inputmode="numeric">
-            </label>
-            <label class="field">…for at least (seconds)
-                <input type="number" id="set-stoptime" min="10" max="300" step="5" inputmode="numeric">
-            </label>
-            <label class="field">…unless the track climbed more than (metres)
-                <input type="number" id="set-stopclimb" min="1" max="20" step="0.5" inputmode="decimal">
-            </label>
-            <p class="hint">The distance grows to the GPS accuracy when that is worse. The climb check stops slow, steep climbs from counting as stops: 3 m in 30 s is a climbing rate of 360 m/h. Lower it if slow climbs still show "Stopped"; it needs a track with elevations. The debug view's "Climb" line shows the value over the last window, to help you choose.</p>
-
-            <h3>Elevation</h3>
-            <label class="field">Ignore climbs/drops smaller than (metres)
-                <input type="number" id="set-elethreshold" min="0" max="20" step="1" inputmode="numeric">
-            </label>
-            <p class="hint">Removes small ups and downs from total ascent/descent. Compare with Maps 3D PRO on the same GPX to tune it.</p>
-
-            <h3>Testing</h3>
-            <label class="field">Debug view (raw vs smoothed GPS)
-                <input type="checkbox" id="set-debug">
-            </label>
-            <label class="field">Simulated GPS (replays the track, or a test walk)
-                <input type="checkbox" id="set-simulate">
-            </label>
-            <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. With no track loaded it walks a 2 km square from your last recorded point (or the map centre), to test free recording. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
-            <div class="actions">
-                <button type="button" id="reset-trip-btn">Reset walked/time</button>
-            </div>
-
-            <h3>Track</h3>
-            <div class="actions">
-                <button type="button" id="reverse-btn">Reverse direction</button>
-                <button type="button" id="test-loop-btn">Test loop here</button>
-                <button type="button" id="sample-btn">Load sample track</button>
-                <button type="button" id="fill-ele-btn">Fill elevations</button>
-                <button type="button" class="danger" id="clear-btn">Remove track</button>
-            </div>
-            <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test. It is not kept when you close the app, unless a hike with it is in progress.</p>
-            <p class="hint">Tracks without elevations (free recordings, GPX files without them, the test loop) get them from a DEM (Digital Elevation Model) when online; the panel says how many points have them and from where. "Fill elevations" retries after being offline.</p>
-
-            <h3>Saved walks</h3>
-            <div id="library"></div>
-            <p class="hint" id="library-empty">None yet. After a recording, tap "Save as track" (in the panel, or below) to keep the walk as a track you can load and follow.</p>
-            <div class="actions">
-                <button type="button" id="new-track-btn">New track</button>
-            </div>
-            <p class="hint">"New track" plans a route on the map; "Edit" changes a saved one. Editing a recorded walk saves a new track and keeps the recording.</p>
-
-            <h3>Planning</h3>
-            <p class="hint">Trail segments follow footpaths using openrouteservice (<code>foot-hiking</code>), through the Trails relay: nothing to set up. When routing is unavailable (offline) or its daily limit is reached, segments are drawn straight.</p>
-            <label class="field">Warn when a straight segment crosses slopes steeper than (degrees)
-                <input type="number" id="set-steep" min="10" max="60" step="1" inputmode="numeric">
-            </label>
-            <p class="hint">Slopes are shown in degrees and as a grade: 15° = 27%, 20° = 36%, 30° = 58%, 45° = 100%.</p>
-
-            <h3>Export (GPX)</h3>
-            <div class="actions">
-                <button type="button" id="export-track-btn">Export track</button>
-                <button type="button" id="export-hike-btn">Export my hike</button>
-                <button type="button" id="save-walk-settings-btn">Save my walk as track</button>
-            </div>
-            <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it; a free recording, made with no track loaded, has none and says so in the file). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file.</p>
-
-            <h3>Data sources</h3>
-            <p class="hint">The map credits are on the map itself. <span id="router-credit"></span>. Elevations (DEM):</p>
-            <ul class="credits" id="dem-credits"></ul>
-
-            <h3>This device</h3>
-            <dl class="info">
-                <dt>Running as</dt><dd id="info-mode">–</dd>
-                <dt>Screen wake lock</dt><dd id="info-wakelock">–</dd>
-                <dt>Vibration</dt><dd id="info-vibrate">–</dd>
-                <dt>Storage</dt><dd id="info-storage">–</dd>
-                <dt>App version</dt><dd id="info-version">–</dd>
-            </dl>
-            <div class="actions" style="margin-top: 10px;">
-                <button type="button" id="update-btn">Check for update</button>
-            </div>
-
-            <button class="close-btn" value="close">Done</button>
-        </form>
-    </dialog>
 
     <dialog id="resume-dialog">
         <form method="dialog">

@@ -116,3 +116,38 @@ test('relay: the key never appears in answers or logs, and stray spaces around i
     assert.match(text, /\[key\]/);
     assert.match(lines.join('\n'), /"surroundingSpace":true/);
 });
+
+const search = (body, origin = SITE) => new Request('https://trails-relay.example.workers.dev/geocode', {
+    method: 'POST',
+    headers: { Origin: origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+});
+
+test('relay: place search goes to openrouteservice geocoding with the key, near the focus point', async () => {
+    const calls = fakeOrs(200, { type: 'FeatureCollection', features: [{ properties: { label: 'Wengen, BE, Switzerland' } }] });
+    const res = await worker.fetch(search({ text: 'Wengen', focus: [7.9, 46.6] }), env);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('Access-Control-Allow-Origin'), SITE);
+    const url = new URL(calls[0].url);
+    assert.equal(url.origin + url.pathname, 'https://api.openrouteservice.org/geocode/search');
+    assert.equal(url.searchParams.get('text'), 'Wengen');
+    assert.equal(url.searchParams.get('size'), '8');
+    assert.equal(url.searchParams.get('focus.point.lat'), '46.6');
+    assert.equal(calls[0].init.headers.Authorization, 'secret-key');
+    assert.doesNotMatch(calls[0].url, /secret-key/);
+    assert.equal((await res.json()).features[0].properties.label, 'Wengen, BE, Switzerland');
+});
+
+test('relay: only routing and place search are relayed', async () => {
+    const calls = fakeOrs(200, {});
+    assert.equal((await worker.fetch(search({ text: '' }), env)).status, 400);
+    assert.equal((await worker.fetch(search({ text: 'x'.repeat(201) }), env)).status, 400);
+    assert.equal((await worker.fetch(search({ text: 'Wengen', focus: [7.9] }), env)).status, 400);
+    for (const path of ['/geocode/reverse', '/v2/directions/foot-hiking', '/isochrones', '/']) {
+        const req = new Request(`https://x.workers.dev${path}`, { method: 'POST', headers: { Origin: SITE }, body: '{"text":"a"}' });
+        const res = await worker.fetch(req, env);
+        assert.equal(res.status, 404, path);
+        assert.match((await res.json()).error, /POST \/route and POST \/geocode/);
+    }
+    assert.equal(calls.length, 0);
+});

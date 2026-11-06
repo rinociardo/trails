@@ -309,6 +309,9 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
         map.getCanvas().style.cursor = hitPlan(e.point, HIT_RADIUS_MOUSE) ? 'pointer' : 'crosshair';
     });
 
+    // Pin for a place found by search (MapLibre's default marker, in the brand colour).
+    const placePin = new maplibregl.Marker({ color: '#2b4c3f' });
+
     function keepInView(fix) {
         const pt = map.project([fix.lon, fix.lat]);
         const { clientWidth: w, clientHeight: h } = map.getContainer();
@@ -363,6 +366,19 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
 
         clearTrack() {
             ready.then(() => map.getSource('track').setData(EMPTY));
+        },
+
+        // A place found by search: fit its area (bbox [west, south, east, north])
+        // or zoom in on the point, with a pin until another place or clearPlace().
+        showPlace({ lat, lon, bbox }) {
+            placePin.setLngLat([lon, lat]).addTo(map);
+            const small = !bbox || (Math.abs(bbox[2] - bbox[0]) < 0.002 && Math.abs(bbox[3] - bbox[1]) < 0.002);
+            if (small) map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 15), duration: 800 });
+            else map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, maxZoom: 15, duration: 800 });
+        },
+
+        clearPlace() {
+            placePin.remove();
         },
 
         fitTrack(points) {

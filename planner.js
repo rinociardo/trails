@@ -3,7 +3,7 @@
 // point, tap the handle to switch the segment between "trail" (follows paths,
 // via the router) and "straight" (cross-country). Live totals and profile from
 // the DEM, a warning where a straight segment crosses steep terrain, then save
-// to Saved walks or export as GPX. Works with mouse and touch (see map-view.js).
+// to the Track Library or export as GPX. Works with mouse and touch (see map-view.js).
 
 import { buildTrack } from './geo.js';
 import { buildProfile } from './elevation.js';
@@ -31,7 +31,8 @@ const ROUTER_PROBLEMS = {
 const NOT_SET_UP = 'Trail routing isn\'t set up yet: segments are drawn straight.';
 
 // deps: { view, chart, settings, saveEntry(entry), exportGpx(text, name, title),
-//         toast(text, ms), formatDistance(m), formatMetres(m), formatDateTime(t), onExit() }
+//         toast(text, ms), formatDistance(m), formatMetres(m), formatDateTime(t),
+//         describe(track, profile) (totals for the GPX description), onOpen(), onExit() }
 export function createPlanner(deps) {
     const { view, chart, settings, toast, formatDistance, formatMetres } = deps;
     const $ = (id) => document.getElementById(id);
@@ -269,7 +270,7 @@ export function createPlanner(deps) {
 
     // ---------- Open, save, export, close ----------
 
-    // entry: a Saved walks entry to edit, or nothing for a new track. A planned
+    // entry: a Track Library entry to edit, or nothing for a new track. A planned
     // track is edited as drawn; a recorded walk is simplified to points on
     // "trail" segments that keep the walked path (no routing needed) and saved
     // as a new entry, so the recording itself is kept.
@@ -302,6 +303,7 @@ export function createPlanner(deps) {
         chart.setData(null, null);
         draw();
         computeElevations();
+        deps.onOpen?.();
     }
 
     async function save() {
@@ -322,7 +324,7 @@ export function createPlanner(deps) {
             await deps.saveEntry(entry);
             entryId = entry.id;
             dirty = false;
-            toast(`Saved “${name}” in Settings › Saved walks: load it there to follow it.`, 5000);
+            toast(`Saved “${name}” in the Track Library: load it there to follow it.`, 5000);
         } catch (err) {
             console.error('Saving planned track failed:', err);
             toast('Could not save the track on this device.', 5000);
@@ -340,11 +342,14 @@ export function createPlanner(deps) {
             return toast('Trails and elevations are still loading: try again in a moment.');
         }
         const name = $('plan-name').value.trim() || 'Planned track';
-        deps.exportGpx(buildGpx({ name, segments: [result.points] }), gpxFileName(name), name);
+        const desc = deps.describe?.(result.track, result.profile) ?? '';
+        deps.exportGpx(buildGpx({ name, desc, segments: [result.points] }), gpxFileName(name), name);
     }
 
+    // Resolves false (and stays open) if there are unsaved changes the user keeps.
     function close() {
-        if (dirty && !confirm('Leave the planner without saving your changes?')) return;
+        if (!editor) return true;
+        if (dirty && !confirm('Leave the planner without saving your changes?')) return false;
         clearTimeout(timer);
         rev++;
         editor = null;
@@ -352,6 +357,7 @@ export function createPlanner(deps) {
         document.body.classList.remove('plan-mode');
         view.stopPlanEditing();
         deps.onExit();
+        return true;
     }
 
     $('plan-undo').addEventListener('click', undo);
@@ -361,12 +367,13 @@ export function createPlanner(deps) {
     });
     $('plan-save').addEventListener('click', save);
     $('plan-export').addEventListener('click', exportPlan);
-    $('plan-done').addEventListener('click', close);
+    $('plan-done').addEventListener('click', () => close());
     $('plan-name').addEventListener('input', () => { if (editor) dirty = true; });
     $('plan-credit').textContent = ROUTER_ATTRIBUTION;
 
     return {
         open,
+        close,
         get active() {
             return editor !== null;
         },

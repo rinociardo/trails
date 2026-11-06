@@ -60,7 +60,9 @@ wanted eventually.
   a Cloudflare Worker (free plan) that keeps the user's openrouteservice key as a secret
   (`ORS_KEY`, set with `wrangler secret put`, never in a file) and forwards one
   `foot-hiking` route between two points. It accepts only `POST /route` with two points
-  ≤ ≈50 km apart, only from `ALLOWED_ORIGINS` (rinociardo.github.io, localhost:8000), at most
+  ≤ ≈50 km apart and (since v0.10.0, 2026-10-29) `POST /geocode` (place search: text
+  ≤ 200 characters, 8 results, optional focus point); **nothing else of openrouteservice
+  is reachable through it**. Only from `ALLOWED_ORIGINS` (rinociardo.github.io, localhost:8000), at most
   30 requests a minute per IP (Cloudflare Rate Limiting binding, approximate, per
   location). Key problems map to quota → 429, refused key → 502. **Every error has a body**
   (requested 2026-10-29): the relay's own refusals say why (`{"error": "…", "from":
@@ -76,9 +78,18 @@ wanted eventually.
   not be used client-side; route requests through your own server). Known limit: the
   origin check stops other websites, not scripts faking the header; worst case the day's
   2,000 routes run out. The user deploys it themselves (`relay/README.md`; Wrangler pinned
-  to 4.151.0); `ROUTER.relayUrl` in `map-config.js` is empty until then (segments straight,
-  note "Trail routing isn't set up yet"). Any key saved by v0.8.0 is deleted from settings.
+  to 4.151.0), and redeploys it after any change to `relay/`. The relay address is `RELAY`
+  in `map-config.js` (set since the first deploy; if it were empty, segments would be
+  straight with the note "Trail routing isn't set up yet"). Any key saved by v0.8.0 is
+  deleted from settings.
   **No personal-key screen for now.**
+- **Place search: openrouteservice geocoding (Pelias) through the relay** (requested by the
+  user 2026-10-29). Only `geocoder.js` talks to it (`GEOCODER` in `map-config.js`; the relay
+  address is `RELAY` there). **Search on Enter only, no as-you-type suggestions**, to save
+  quota. The free key's geocoding quota is not published on openrouteservice's plans page
+  (it lists directions 2,000/day, isochrones and matrix only): check the key's dashboard.
+  Attribution shown under the results and in Settings › Data sources. To be reused for
+  From → To.
 - No build step: plain HTML/JS/CSS served as-is; ES modules.
 - **Hosting: GitHub Pages**, repo `rinociardo/trails`, URL https://rinociardo.github.io/trails/.
   HTTPS is required for GPS, the service worker and installing. The `rinociardo.github.io`
@@ -339,7 +350,64 @@ Routing services compared on 2026-10-28 (all four allow calls from a browser, CO
 Routing would be per "trail" segment (between its two points), so editing costs one request
 per changed segment.
 
+### Navigation: bottom tab bar (built in v0.10.0, requested 2026-10-29)
+Status: **approved in principle; final approval after the user tests it on the iPhone and
+the Mac.** Replaces the mixed Settings dialog. Tabs (left to right), each part of the screen
+lists in `data-tabs` where it shows:
+- **Explore**: place search (top bar), **Locate me** (one position request, blue dot, map
+  jumps there), **Layers** (only OpenStreetMap standard for now; topographic, trail overlay,
+  coverage planned), trip panel with the loaded track's totals/profile. Trail scan: to do
+  (see below).
+- **Plan**: a start card: **Draw a new track**, **Edit the loaded track** (like a recorded
+  walk: simplified, saved as a new track), From → To and Loop generator (greyed, "planned").
+  Then the planner as before (name bar, Undo / Next / Save / Export / Done, totals/profile).
+  Not while hiking. Leaving the tab with unsaved changes asks first (Cancel stays).
+- **Go**: the hike screen: Start/Stop, Center, Dim, top numbers, trip table, profile,
+  walked row, alerts; under the profile **Reverse direction · Fill elevations · Unload
+  track** (unload keeps library copies). Track loaded = follow it; none = free walk.
+- **Track Library** (renamed from "Library" by the user 2026-10-29): saved tracks and walks
+  (Load → Go, Edit → Plan, Delete), **Import GPX** (also adds the file to the library),
+  New track, **Loaded track** (Export track, Add to library), **Current recording** (Export
+  my hike, Save as track, Reset walked/time).
+- **Settings**: preferences only: Units, Alerts, Screen and battery (auto-dim, Wake Lock
+  support), GPS smoothing, Stop detection, Elevation, Planning (steep slope), Data sources,
+  Testing (debug view, simulated GPS, test loop, sample track), This device (version,
+  check for update).
+- The hike keeps running on every tab (red dot on Go); the off-track banner and toasts
+  show above every tab. The last tab is reopened (Plan reopens as Explore).
+- Nothing previously reachable was dropped (mapping in README step 21).
+
+### Units (built in v0.10.0, requested 2026-10-29)
+- Settings › Units: **km and m** or **miles and feet**; first default from the phone's
+  region (US, Liberia, Myanmar → imperial). Applied everywhere: top bar, trip table, profile
+  axes and finger readout, planner totals and messages, toasts, Resume/Keep dialogs, Track
+  Library, debug box, GPS accuracy, and the Settings length fields (typed in m or ft, stored
+  in metres; steps 10 ft / 5 m etc.). Speeds km/h or mph. Distances under 1,000 ft (1 km)
+  are shown in ft (m).
+- Exports: GPX coordinates and `<ele>` stay in **metres** (the GPX 1.1 standard; every app
+  converts on import); the file's `<desc>` gives the totals in the chosen units ("Distance
+  4.54 mi, ascent 739 ft, descent 731 ft"; a hike: walked distance and moving time).
+- Slopes stay in degrees and %.
+
 ### Still to build
+- **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
+  (overpass-api.de) for `highway=path` and `route=hiking` in the view and drew them. To
+  propose: source (Overpass public instance has a fair-use policy) vs a hiking-trail
+  overlay layer.
+- **From → To** (Plan): search both ends with the place search, route between them (one
+  relay `/route` request; segments of ≤ ≈50 km), turn the route into an editable plan.
+- **Loop generator** (Plan), proposal 2026-10-29, not built: "N km/mi inside a rectangle I
+  draw, with minimal overlap": openrouteservice `round_trip` (length, points, seed) from a
+  start point, several candidates (different seeds/points), keep those inside the
+  rectangle, score on overlap and length error, show the best 2–3. ≈8–12 routing requests
+  per use. Needs a relay change (accept one point plus `round_trip`, length capped).
+- **Coverage layer** (Explore), proposal 2026-10-29, not built: US FCC National Broadband
+  Map mobile data (by provider/state/technology, H3 hexagons, offered free of copyright
+  restriction per FCC wording) as a pre-built regional layer; Italy: AGCOM broadband map
+  open data (licence and freshness to verify) and Infratel's 2024 4G/5G mapping (open data
+  to verify); OpenCelliD towers (CC BY-SA 4.0) as a fallback hint. Plus a **personal
+  coverage log**: while hiking, a tiny connectivity probe every 1–2 min stored with the
+  position, shown as a layer (no signal strength or carrier on the web, foreground only).
 - Stage 3 Prepare: offline map download for an area at the highest zoom available
   (needs the offline map source decision; must respect provider terms and storage limits).
 - Stage 1 Scout: improvements (search, locate me, topographic layer, trail overlay).
@@ -363,9 +431,10 @@ per changed segment.
 - Run locally: `python3 -m http.server 8000`; tests: `npm test`.
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
   side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `router.js`
-  the routing service (through the relay in `relay/`, deployed separately to Cloudflare).
+  the routing service and `geocoder.js` the place search (both through the relay in `relay/`,
+  deployed separately to Cloudflare: redeploy it after changing `relay/`).
 - Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
   distance walked in that time is missing from the recording.
