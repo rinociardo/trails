@@ -256,6 +256,11 @@ test('guide: GPX export has the waypoints before the track, escaped, with restro
 
 // ---------- The whole path, on recorded answers: no network, no quota ----------
 
+test('guide: with nothing stubbed, the network is off for every test', async () => {
+    await assert.rejects(fetch('https://api.openrouteservice.org/geocode/search?text=x'), /network is off/);
+    assert.deepEqual(await searchPlaces('Ottermere Marina'), { ok: false, reason: 'unavailable', detail: 'relay not reachable' });
+});
+
 test('guide: recorded answers are the default, and tests cannot reach the network', async () => {
     const network = useRecordedResponses();
     try {

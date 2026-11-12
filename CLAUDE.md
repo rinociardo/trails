@@ -75,7 +75,17 @@ wanted eventually.
   single control character, not the key (Ctrl+V in a Linux terminal types a control
   character; paste with Ctrl+Shift+V).
   openrouteservice's FAQ explicitly recommends this (a key belongs to one person and must
-  not be used client-side; route requests through your own server). Known limit: the
+  not be used client-side; route requests through your own server).
+  **Terms checked 2026-11-12** (account.heigit.org/info/tos and /info/plans, FAQ): server-side use
+  with the key kept secret is the FAQ's first recommended practice; "every HeiGIT API key belongs to
+  one person" and one account per person. The Standard plan is described as "free to use for everyone"
+  (wording seen for HeiGIT's other services; the openrouteservice wording wasn't readable); the
+  Collaborative plan is for humanitarian, academic, governmental or non-profit use. The terms don't
+  forbid a server serving other people's apps, don't mention friends or sharing results, and say
+  nothing about caching. Required: attribution (OpenStreetMap; results are CC-BY-SA 4.0); no
+  transmitting personal data; repeated limit overruns can get the account blocked or removed.
+  Open question for the user: whether serving a small group of friends fits "belongs to one person"
+  (ask HeiGIT support to be sure). Known limit: the
   origin check stops other websites, not scripts faking the header; worst case the day's
   2,000 routes run out. The user deploys it themselves (`relay/README.md`; Wrangler pinned
   to 4.151.0), and redeploys it after any change to `relay/`. The relay address is `RELAY`
@@ -86,8 +96,9 @@ wanted eventually.
 - **Place search: openrouteservice geocoding (Pelias) through the relay** (requested by the
   user 2026-10-29). Only `geocoder.js` talks to it (`GEOCODER` in `map-config.js`; the relay
   address is `RELAY` there). **Search on Enter only, no as-you-type suggestions**, to save
-  quota. The free key's geocoding quota is not published on openrouteservice's plans page
-  (it lists directions 2,000/day, isochrones and matrix only): check the key's dashboard.
+  quota. Free (Standard) plan, read from account.heigit.org on 2026-11-12: place search
+  **1,000 a day, 100 a minute** (directions 2,000 a day, 40 a minute); the dashboard shows the
+  key's own numbers.
   Attribution shown under the results and in Settings › Data sources. To be reused for
   From → To.
 - No build step: plain HTML/JS/CSS served as-is; ES modules.
@@ -443,13 +454,15 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   its wording, places or mileages; `.gitignore` blocks `*.docx`. `tests/fixtures/guide-milestones.txt` is
   an invented sheet. `tests/fixtures/guide-recorded-responses.json` holds invented answers in the
   real format, because a recording of real searches would bring real names back.
-- **Tests use recorded answers by default** (decided 2026-11-06): `tests/helpers/recorded.js` replaces
-  `fetch` and refuses anything else, so a test can't use quota; browser test scripts use its
-  `useRecordedResponsesInBrowser(context)`. **The real relay only on the user's explicit request.**
+- **Tests use recorded answers by default, never the live relay** (decided 2026-11-06, confirmed
+  2026-11-12): `npm test` loads `tests/helpers/no-network.js` first, so `fetch` fails in every test
+  unless the test stubs it (`relay.test.js`) or uses `tests/helpers/recorded.js`; browser test scripts
+  use its `useRecordedResponsesInBrowser(context)`. **The real relay only on the user's explicit request.**
 - **Search quota**: a sheet takes 10–25 searches, answers are cached while the app is open
   (`cachedSearch`). Testing against the real service used about 130 in one evening, then openrouteservice
   answered 429 "Quota exceeded", still refused 2.5 minutes later (so not a per-minute limit; routing kept
-  working). The limit isn't published: see the key's dashboard.
+  working). That is well under the published 1,000 a day, so the cause is unknown: check the key's
+  dashboard.
 
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
