@@ -61,7 +61,7 @@ wanted eventually.
   (`ORS_KEY`, set with `wrangler secret put`, never in a file) and forwards one
   `foot-hiking` route between two points. It accepts only `POST /route` with two points
   ≤ ≈50 km apart (optional `"alternatives": true`: up to 3 routes, since v0.13.0, for
-  recording gaps; needs a redeploy) and (since v0.10.0, 2026-10-29) `POST /geocode` (place search: text
+  recording gaps; deployed by the user 2026-11-12) and (since v0.10.0, 2026-10-29) `POST /geocode` (place search: text
   ≤ 200 characters, 8 results, optional focus point); **nothing else of openrouteservice
   is reachable through it**. Only from `ALLOWED_ORIGINS` (rinociardo.github.io, localhost:8000), at most
   30 requests a minute per IP (Cloudflare Rate Limiting binding, approximate, per
@@ -565,6 +565,55 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   with the 3× route dropped, offline gap filled after "online", review switch updates totals,
   GPX gap segments, track gap with no request, Resume after a 40 s close counted as a gap.
 
+### Smart Pause (built in v0.14.0, requested 2026-11-12; awaiting iPhone testing)
+- **Pause** button on Go next to Start/Stop (Stop still ends or interrupts the hike). Pressing it draws a
+  **pause zone** (amber circle) around the current position, radius Settings › Pause, default **150 m**
+  (30–1000 m). The button becomes **Resume**.
+- **While paused** positions still come in but **nothing counts**: no distance, moving or stopped time,
+  climb, vertical speed or off-track alerts, even walking about inside the zone. Status line "Paused m:ss";
+  the panel's **Paused** time is kept apart from Moving and Stopped and left out of every average.
+- **Auto-resume** (`PauseWatcher` in `pause.js`): outside the zone for about **a minute**, at walking pace
+  (0.5 m/s up to the gap-filling speed, 7 km/h by default) and going **steadily away** (at least half the
+  distance walked since leaving leads away), or forward along the loaded track while on it (a loop that
+  bends back past the zone). Counting is **backdated to the zone exit**: the positions since then are
+  replayed as normal fixes. Banner (no sound) "Resumed: you're back on the move." with **Undo** (offered
+  2 minutes).
+- **Undo** (walking back to the car): back to paused, numbers, path and gaps as they were; that pause then
+  never resumes by itself, and a manual Resume counts **from the moment it is pressed**.
+- **Unclear** (outside but slow, back and forth, or faster than walking): banner "Still paused. Resume?",
+  once per time outside the zone.
+- **Manual Resume**: from the zone exit if you are outside it now, else from now.
+- **Phone locked during the pause** (no position for 20 s or more) and back at least 2× the radius away: you
+  walked on unseen. Resume from the first position seen outside the zone, else from the zone's edge
+  toward you; the time walking is the straight distance × 1.3 at your pace before (capped at the hole),
+  the rest stays paused; the stretch is filled as a **recording gap** (v0.13.0 rules). Back inside the zone
+  or just outside it: still paused, watched as usual. **A pause itself is never a gap.**
+- The pause is a **break in the walked line** and its own GPX `<trkseg>`; exported `<desc>` gives the paused
+  time. Saved with the recording (`pausedMs`, `pause` = the watcher), so it survives a force-close and
+  Resume re-enters it. Stop ends a pause (its time counts as Paused); Reset clears it.
+- Simulated GPS stands still for a minute after Pause, then walks on.
+- Tested 2026-11-12: unit tests with simulated picnics (`tests/pause-coords.test.js`: wandering inside for
+  half an hour, leaving to carry on, back to the car then driving, pacing/slow asks, a track arc, phone
+  locked, snapshot); headless browser (simulated GPS, synthetic DEM, faked router, no live relay): pause,
+  auto-resume with the exit backdated, Undo, manual Resume, force-close while paused, GPX segments.
+
+### Coordinates and points on the map (built in v0.14.0, requested 2026-11-12; awaiting iPhone testing)
+- **Coordinate search** in Explore, read on the phone (`coords.js`, **no relay request**): decimal
+  (`46.5679, 7.9123`, a space or `;` between), **decimal commas** with a space or semicolon between
+  (`46,5679 7,9123`, `46,5679; 7,9123`), N/S/E/W letters before or after (longitude first if the letters
+  say so), degrees-minutes-seconds and degrees-decimal-minutes, with or without ° ' ". Without letters:
+  latitude first. Anything else is searched as a place as before.
+- The parsed point is **shown first** (decimal and DMS) as the only result; tapping it goes there with a pin
+  and the **point menu**: coordinates, **Copy** (decimal), **Start here**, **End here**.
+- **Long-press** on the map (≈0.6 s, cancelled by moving the finger, dragging or zooming; right-click on the
+  Mac; not while drawing in Plan) opens the same menu.
+- **Start/End** are shown on Plan's start card ("From … → to …", Clear). **Draw a new track** then opens the
+  planner with them joined by one trail segment (one routing request; straight when routing isn't set up),
+  or with just the start. They are cleared once used.
+- Tested 2026-11-12: unit tests for the formats and for place names that must not be read as coordinates;
+  headless browser: both comma formats, no geocode request, Copy, right-click menu, Start/End into the
+  planner with one (faked) route request.
+
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
   (overpass-api.de) for `highway=path` and `route=hiking` in the view and drew them. To
@@ -608,7 +657,7 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   trail-guide importer).
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `gaps.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `gaps.js`, `pause.js`, `coords.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
   side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `guide-import.js` the trail-guide importer; `router.js`
   the routing service and `geocoder.js` the place search (both through the relay in `relay/`,

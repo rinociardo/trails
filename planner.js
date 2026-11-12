@@ -283,7 +283,7 @@ export function createPlanner(deps) {
             const { vertices, segments } = entry.plan;
             const routes = entry.plan.routes ?? segments.map((t, i) => (t === SEGMENT_TRAIL ? [vertices[i], vertices[i + 1]] : null));
             editor = new PlanEditor({ vertices, segments, routes });
-            entryId = entry.id;
+            entryId = entry.id ?? null;
             $('plan-name').value = entry.name;
         } else if (entry) {
             editor = new PlanEditor(planFromWalk(entry.points));
@@ -305,6 +305,11 @@ export function createPlanner(deps) {
         chart.setData(null, null);
         draw();
         computeElevations();
+        // A new plan from a start and end chosen on the map: its trail segment is routed now.
+        if (editor.unrouted.length) {
+            dirty = !entryId;
+            routePending();
+        }
         deps.onOpen?.();
     }
 

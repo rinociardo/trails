@@ -229,6 +229,20 @@
             font-weight: 700;
             box-shadow: 0 4px 12px rgba(0,0,0,.3);
         }
+        #pause-banner {
+            top: calc(var(--stats-h, 0px) + 64px);
+            display: flex; align-items: center; gap: 10px;
+            background: #2b4c3f; color: #fff; font-weight: 600;
+        }
+        #pause-banner span { flex: 1; }
+        #pause-banner button { border: 1px solid rgba(255,255,255,.6); background: none; color: #fff; border-radius: 8px; padding: 6px 10px; font: inherit; }
+        #pause-banner #pause-banner-close { border: 0; padding: 4px 6px; font-size: 18px; }
+        #map { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+        .point-menu { font-size: 13px; color: #222; }
+        .point-menu b { display: block; font-size: 14px; }
+        .point-menu .dms { color: #555; margin-bottom: 6px; }
+        .point-menu .row { display: flex; gap: 6px; flex-wrap: wrap; }
+        .point-menu button { padding: 5px 8px; border-radius: 8px; border: 1px solid #bbb; background: #fff; color: #222; font: inherit; }
         #alert-banner {
             top: calc(var(--stats-h, 0px) + 8px);
             background: var(--danger);
@@ -609,6 +623,7 @@
         <button type="button" class="primary-action" id="new-track-btn">Draw a new track</button>
         <button type="button" id="edit-loaded-btn">Edit the loaded track</button>
         <button type="button" id="guide-btn">Import a trail guide</button>
+        <p class="hint" id="plan-ends" hidden></p>
         <button type="button" disabled>From → To <small>(planned)</small></button>
         <button type="button" disabled>Loop generator <small>(planned)</small></button>
         <p class="hint" id="plan-start-hint">To change a saved track: Track Library › Edit. Editing a recorded walk or a GPX saves a new track and keeps the original.</p>
@@ -720,6 +735,7 @@
                 <div><span>Walked</span><b id="w-walked">–</b></div>
                 <div><span>Moving</span><b id="w-moving">–</b></div>
                 <div><span>Stopped</span><b id="w-stopped">–</b></div>
+                <div><span>Paused</span><b id="w-paused">–</b></div>
                 <div><span>Avg speed</span><b id="w-speed">–</b></div>
                 <div><span>Speed</span><b id="w-speed-now">–</b></div>
                 <div><span>Elevation</span><b id="w-ele">–</b></div>
@@ -821,6 +837,12 @@
         </label>
         <p class="hint">More fixes give a steadier position but it trails behind you: about half a second per fix (5 fixes ≈ 2 s ≈ 3 m at walking pace).</p>
 
+        <h3>Pause</h3>
+        <label class="field"><span>Pause zone radius (<span class="u-len">m</span>)</span>
+            <input type="number" id="set-pause-radius" inputmode="numeric">
+        </label>
+        <p class="hint">Go › Pause (during a picnic, at a summit, in a café) draws a zone around you. Nothing counts while paused, even walking about inside it. Once you are outside it and walking steadily away (or along the loaded track) for about a minute, the hike resumes by itself, counted from where you left the zone, with an Undo. If it isn't clear (outside but slow, or back and forth), it asks instead. Resume works by hand too.</p>
+
         <h3>Recording gaps</h3>
         <label class="field"><span>Fill gaps with routes walkable at up to (<span class="u-speed">km/h</span>)</span>
             <input type="number" id="set-gap-speed" min="2" max="20" step="0.5" inputmode="decimal">
@@ -865,7 +887,7 @@
         <label class="field">Simulated GPS (replays the track, or a test walk)
             <input type="checkbox" id="set-simulate">
         </label>
-        <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. With no track loaded it walks a 2 km square from your last recorded point (or the map centre), to test free recording. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
+        <p class="hint">Simulated GPS walks the loaded track at 10× speed with GPS noise, a 45 s stop and a 120 m detour. With no track loaded it walks a 2 km square from your last recorded point (or the map centre), to test free recording. After Go › Pause it stands still for a minute (a picnic), then walks on. The app reloads when you switch it. Remember to turn it off before a real hike.</p>
         <div class="actions">
             <button type="button" id="test-loop-btn">Test loop here</button>
             <button type="button" id="sample-btn">Load sample track</button>
@@ -887,6 +909,11 @@
     </section>
 
     <div id="alert-banner" class="banner" role="alert" hidden>OFF TRACK · <span id="alert-distance"></span></div>
+    <div id="pause-banner" class="banner" role="status" hidden>
+        <span id="pause-banner-text"></span>
+        <button type="button" id="pause-banner-action"></button>
+        <button type="button" id="pause-banner-close" aria-label="Close">×</button>
+    </div>
     <div id="update-banner" class="banner" hidden>
         <span>New version installed.</span>
         <button type="button" id="reload-btn">Reload</button>
@@ -899,6 +926,7 @@
             <button type="button" class="tool" id="locate-btn" data-tabs="explore">Locate me</button>
             <button type="button" class="tool" id="layers-btn" data-tabs="explore">Layers</button>
             <button type="button" class="tool primary" id="start-btn" data-tabs="go">Start</button>
+            <button type="button" class="tool" id="pause-btn" data-tabs="go" hidden>Pause</button>
             <button type="button" class="tool" id="center-btn" data-tabs="go">Center</button>
             <button type="button" class="tool" id="dim-btn" data-tabs="go">Dim</button>
             <button type="button" class="tool plan-only" id="plan-undo" data-tabs="plan">Undo</button>

@@ -26,6 +26,7 @@ function buildStyle(basemap) {
             track: { type: 'geojson', data: EMPTY },
             walked: { type: 'geojson', data: EMPTY },
             gaps: { type: 'geojson', data: EMPTY },
+            pause: { type: 'geojson', data: EMPTY },
             plan: { type: 'geojson', data: EMPTY },
             accuracy: { type: 'geojson', data: EMPTY },
             debug: { type: 'geojson', data: EMPTY },
@@ -67,6 +68,15 @@ function buildStyle(basemap) {
                 filter: ['get', 'gap'],
                 layout: { 'line-join': 'round' },
                 paint: { 'line-color': '#d6336c', 'line-width': 3, 'line-dasharray': [1.5, 1.5] },
+            },
+            // Smart Pause: the zone you must leave for the hike to resume.
+            {
+                id: 'pause-fill', type: 'fill', source: 'pause',
+                paint: { 'fill-color': '#e8a317', 'fill-opacity': 0.12 },
+            },
+            {
+                id: 'pause-line', type: 'line', source: 'pause',
+                paint: { 'line-color': '#b7791f', 'line-width': 2, 'line-dasharray': [2, 1.5] },
             },
             // Reviewing a gap (Track Library): the other options grey, the chosen one pink.
             {
@@ -340,6 +350,33 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
         map.getCanvas().style.cursor = hitPlan(e.point, HIT_RADIUS_MOUSE) ? 'pointer' : 'crosshair';
     });
 
+    // Long-press: a finger held still for 0.6 s (iPhone has no contextmenu event).
+    let longPress = null, pressTimer = null, pressStart = null, pointMenu = null;
+    const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
+    map.on('touchstart', (e) => {
+        cancelPress();
+        if (!longPress || planHandlers || e.points.length !== 1) return;
+        pressStart = e.point;
+        const lngLat = e.lngLat;
+        pressTimer = setTimeout(() => {
+            pressTimer = null;
+            suppressClickUntil = Date.now() + 600;
+            longPress(toPoint(lngLat));
+        }, 600);
+    });
+    map.on('touchmove', (e) => {
+        if (pressTimer && Math.hypot(e.point.x - pressStart.x, e.point.y - pressStart.y) > 10) cancelPress();
+    });
+    map.on('touchend', cancelPress);
+    map.on('touchcancel', cancelPress);
+    map.on('dragstart', cancelPress);
+    map.on('zoomstart', cancelPress);
+    map.on('contextmenu', (e) => {
+        if (!longPress || planHandlers) return;
+        e.preventDefault();
+        longPress(toPoint(e.lngLat));
+    });
+
     // Pin for a place found by search (MapLibre's default marker, in the brand colour).
     const placePin = new maplibregl.Marker({ color: '#2b4c3f' });
 
@@ -377,6 +414,28 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
                 .filter((f) => f.coordinates.length)
                 .map(({ gap, coordinates }) => ({ type: 'Feature', properties: { gap }, geometry: { type: 'MultiLineString', coordinates } }));
             ready.then(() => map.getSource('walked').setData({ type: 'FeatureCollection', features }));
+        },
+
+        // Smart Pause zone (null clears it).
+        setPauseZone(centre, radiusM) {
+            ready.then(() => map.getSource('pause').setData(centre ? circlePolygon(centre, radiusM) : EMPTY));
+        },
+
+        // A small menu at a point (coordinates, Copy, Start/End here); null closes it.
+        showPointMenu(point, content) {
+            pointMenu?.remove();
+            pointMenu = null;
+            if (!point) return;
+            pointMenu = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '280px' })
+                .setLngLat([point.lon, point.lat])
+                .setDOMContent(content)
+                .addTo(map);
+        },
+
+        // Long-press on the map (or right-click on the Mac): callback({ lat, lon }).
+        // Not while editing a plan, where a held finger drags points.
+        onLongPress(callback) {
+            longPress = callback;
         },
 
         // Reviewing a gap: options [{ points, chosen }], or null to clear. Fits them in view.
