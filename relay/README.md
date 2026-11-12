@@ -11,7 +11,9 @@ be used inside an app; route the app's requests through your own server instead
 
 ## What it allows
 
-- Only `POST /route` with two nearby points (at most ≈50 km apart), as the planner sends,
+- Only `POST /route` with two nearby points (at most ≈50 km apart), as the planner sends
+  (with `"alternatives": true`, up to 3 different routes in one request: v0.13.0 uses this
+  to fill recording gaps),
   and `POST /geocode` with a place name (at most 200 characters, 8 results, optionally
   near a point). Nothing else of openrouteservice is reachable through it.
 - Only from the sites in `ALLOWED_ORIGINS` (`wrangler.toml`): the app on
@@ -86,7 +88,8 @@ quotes it, it is replaced by `[key]`.
 
 ## Updating the relay
 
-After a change to `worker.js` or `wrangler.toml` (e.g. v0.10.0 added place search):
+After a change to `worker.js` or `wrangler.toml` (e.g. v0.10.0 added place search, v0.13.0
+alternative routes for recording gaps):
 ```
 cd ~/Projects/Trails/relay
 npx wrangler@4.151.0 deploy
@@ -98,6 +101,15 @@ curl -s -i -X POST https://trails-relay.rinociardo.workers.dev/geocode \
   -d '{"text":"Wengen"}' | head -c 400
 ```
 Expect `HTTP/2 200` and `{"geocoding":…,"type":"FeatureCollection",…`.
+
+Check alternative routes (v0.13.0):
+```
+curl -s -X POST https://trails-relay.rinociardo.workers.dev/route \
+  -H 'Origin: https://rinociardo.github.io' -H 'Content-Type: application/json' \
+  -d '{"coordinates":[[7.905,46.605],[7.93,46.59]],"alternatives":true}' | grep -o '"type":"Feature"' | wc -l
+```
+Expect a number from 1 to 3 (how many different routes it found). Until the relay is
+redeployed, the app still fills gaps, with one route and no alternatives.
 
 ## Later
 

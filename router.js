@@ -58,3 +58,38 @@ export async function routeBetween(a, b) {
     if ([2004, 2009, 2010].includes(code) || (response.status === 404 && code !== undefined)) return { ok: false, reason: 'no-route', detail: message };
     return { ok: false, reason: 'unavailable', detail: `HTTP ${response.status} ${message}`.trim() };
 }
+
+// Recording gaps: up to 3 routes from a to b in one request (openrouteservice's
+// alternative routes, through the relay). Resolves { ok: true, paths: [[{ lat, lon }]] }
+// or { ok: false, reason, detail } with the same reasons as routeBetween. A relay
+// deployed before alternatives existed answers with one route: still fine.
+export async function routeAlternatives(a, b) {
+    if (!ROUTER.relayUrl) return { ok: false, reason: 'unavailable', detail: 'no relay configured' };
+    let response, body = null;
+    try {
+        response = await fetch(ROUTER.relayUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coordinates: [[a.lon, a.lat], [b.lon, b.lat]], alternatives: true }),
+        });
+    } catch {
+        return { ok: false, reason: 'unavailable', detail: 'relay not reachable' };
+    }
+    try {
+        body = await response.json();
+    } catch {
+        // Not JSON: handled by the status below.
+    }
+    if (response.ok) {
+        const paths = (body?.features ?? [])
+            .map((f) => f?.geometry?.coordinates)
+            .filter((c) => Array.isArray(c) && c.length >= 2)
+            .map((c) => c.map(([lon, lat]) => ({ lat, lon })));
+        return paths.length ? { ok: true, paths } : { ok: false, reason: 'no-route', detail: 'empty route' };
+    }
+    const message = typeof body?.error === 'string' ? body.error : body?.error?.message ?? '';
+    const code = body?.error?.code;
+    if (response.status === 429) return { ok: false, reason: 'limit', detail: message };
+    if ([2004, 2009, 2010].includes(code) || (response.status === 404 && code !== undefined)) return { ok: false, reason: 'no-route', detail: message };
+    return { ok: false, reason: 'unavailable', detail: `HTTP ${response.status} ${message}`.trim() };
+}

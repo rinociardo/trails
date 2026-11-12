@@ -60,7 +60,8 @@ wanted eventually.
   a Cloudflare Worker (free plan) that keeps the user's openrouteservice key as a secret
   (`ORS_KEY`, set with `wrangler secret put`, never in a file) and forwards one
   `foot-hiking` route between two points. It accepts only `POST /route` with two points
-  ≤ ≈50 km apart and (since v0.10.0, 2026-10-29) `POST /geocode` (place search: text
+  ≤ ≈50 km apart (optional `"alternatives": true`: up to 3 routes, since v0.13.0, for
+  recording gaps; needs a redeploy) and (since v0.10.0, 2026-10-29) `POST /geocode` (place search: text
   ≤ 200 characters, 8 results, optional focus point); **nothing else of openrouteservice
   is reachable through it**. Only from `ALLOWED_ORIGINS` (rinociardo.github.io, localhost:8000), at most
   30 requests a minute per IP (Cloudflare Rate Limiting binding, approximate, per
@@ -174,8 +175,9 @@ wanted eventually.
   app goes to the background.
 - On reopening: if the hike was running, a **"Resume hike?"** prompt (Resume / Start
   fresh); if it had been stopped, the numbers are restored quietly. Progress is only
-  restored onto the same track. Time while the app was closed is not counted; at most
-  the last 10 s can be lost.
+  restored onto the same track. Since v0.13.0 Resume turns the time the app was closed into
+  a recording gap (see "Recording gaps"); until then it was not counted. At most the last
+  10 s before the close can be lost.
 - Test plan step: start a simulated hike, force-close from the app switcher, reopen,
   check it resumes (README, step 5).
 
@@ -512,6 +514,57 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   stored area (works) and an unstored one ("unavailable"), off-track display with all three alert
   modes, Track / My walk switch, recording save.
 
+### Recording gaps (built in v0.13.0, requested 2026-11-12; awaiting iPhone testing)
+- **What happened before v0.13.0** (reported to the user 2026-11-12): in the background or
+  locked, the clocks counted the whole gap in the state before it (usually moving), and the
+  first fix after it added the **straight-line** distance to Walked, drawn as a straight jump in
+  the pink line and the GPX. Closed and resumed: neither the time nor the distance counted, and
+  Resume started a new segment. Elevation: the net change counted as one climb or drop.
+- **A gap** = no accepted fix for **20 s** or more while a hike runs (background, screen locked,
+  closed then Resume, or no GPS / only bad fixes). A deliberate Stop..Start is not a gap (new
+  segment, nothing counted, as before). The clock ignores any jump over 10 s between its 1 s
+  ticks (the app was suspended); at the first fix after a gap the clocks go back to the last fix
+  before it and the gap accounts for the whole time (`MotionTracker.gap`).
+- **Filling** (`gaps.js` rules, `gap-fill.js` in the background, like the planner):
+  - Stopped before and still inside the stop area: all stopped time, nothing drawn.
+  - Under **50 m**: straight line, no request.
+  - **Track loaded** and on it before and after (same limits as off-track, straight segments
+    wider): the track between the two points, no request, if walkable in the time.
+  - Otherwise **one router request** (`foot-hiking`, `"alternatives": true` through the relay:
+    up to 3 routes, sharing ≤ 60%, ≤ 1.6× the best). Routes are joined to both ends. Dropped:
+    implied speed over the setting (Settings › Recording gaps, default **7 km/h**; × the
+    simulation speed when simulating) or longer than **3×** the straight line. Default = implied
+    speed closest to the **pace before the gap** (average moving speed, 4.3 km/h in the first
+    minute). The straight line is always kept as a last option.
+  - No route, or none walkable: straight line, **a guess** (with the reason). More than ≈50 km
+    (the relay's limit): straight, a guess.
+  - No signal or limit reached: straight line **"to be filled"**, retried when the phone goes
+    online, when the app comes back, every minute while hiking and on reopening.
+- **Counting**: the chosen option's length is walked. Gap time is moving for as long as that
+  distance takes at the pace before the gap, the rest stopped. Ascent/descent from the option's
+  DEM elevations (same hysteresis). Totals = recorded + gaps (`walkTotals`); the live climb
+  counter pauses across a gap. Average up/down rates use recorded time only.
+- **Resume after a force-close** carries on the same segment; the closed time becomes a gap from
+  the last recorded point to the first fix.
+- **No questions during the hike**: a short toast when it is filled, e.g. "Paused 8 min, filled
+  from trails (640 m)", "…filled along the track", "…: no signal: filled when back online;
+  straight for now", "…: no trail found, drawn straight (a guess)". Not for gaps under a minute
+  and 50 m.
+- **Track Library › Gaps in the recording**: one row per gap (time, length, how filled, other
+  options), **Show** (after Stop) opens the map with that gap's options: grey dashed, the chosen
+  one pink; tap a grey line or a button to switch; Previous / Next / Done. Totals follow.
+- **Drawing**: filled gaps dashed in the pink walked line.
+- **GPX**: each filled gap is its own `<trkseg>` (from the last fix before to the first after);
+  its points carry `<type>Gap filled with a trail route (a guess)</type>` (or the planned track, a
+  straight line…) and the filled ones `<fix>none</fix>`; `<desc>` says how many gaps were filled.
+  Times of filled points are spread by distance between the gap's two fixes.
+- Saved with the recording (`gaps`: ends, options with points and elevations, chosen, status).
+- Settings › Testing › **Simulate a 1-minute GPS gap** (Simulated GPS on, hike running).
+- Tested 2026-11-12: unit tests (`tests/gaps.test.js`); headless browser with a faked router
+  (3 routes, one too long), synthetic DEM, never the live relay: free-walk gap filled from trails
+  with the 3× route dropped, offline gap filled after "online", review switch updates totals,
+  GPX gap segments, track gap with no request, Resume after a 40 s close counted as a gap.
+
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
   (overpass-api.de) for `highway=path` and `route=hiking` in the view and drew them. To
@@ -555,10 +608,10 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   trail-guide importer).
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `gaps.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
   side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `guide-import.js` the trail-guide importer; `router.js`
   the routing service and `geocoder.js` the place search (both through the relay in `relay/`,
   deployed separately to Cloudflare: redeploy it after changing `relay/`).
-- Known gap: GPS does not run while the app is closed or in the background (iOS limit), so
-  distance walked in that time is missing from the recording.
+- Known gap: GPS does not run while the app is closed or in the background (iOS limit).
+  Since v0.13.0 that time is filled by guessing the way (recording gaps), not measured.

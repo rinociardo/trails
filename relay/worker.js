@@ -1,6 +1,7 @@
 // Trails relay: a Cloudflare Worker that holds the openrouteservice key as a
 // secret (ORS_KEY), so the app needs no key. It answers only the app's two kinds
-// of request: POST /route (one foot-hiking route between two points) and
+// of request: POST /route (one foot-hiking route between two points, or with
+// "alternatives": true up to 3 different ones, for filling recording gaps) and
 // POST /geocode (a place search), only from the allowed sites (ALLOWED_ORIGINS),
 // with a per-visitor rate limit (RATE_LIMITER) shared by both.
 // openrouteservice's FAQ recommends exactly this: keep the key on a server that
@@ -106,12 +107,17 @@ export default {
         } else {
             const coordinates = body?.coordinates;
             if (!validCoordinates(coordinates)) {
-                return reply(400, 'bad request: expected {"coordinates": [[lon, lat], [lon, lat]]}, two points at most 0.5° apart');
+                return reply(400, 'bad request: expected {"coordinates": [[lon, lat], [lon, lat]], "alternatives": true (optional)}, two points at most 0.5° apart');
             }
+            if (body.alternatives !== undefined && typeof body.alternatives !== 'boolean') {
+                return reply(400, 'bad request: "alternatives" must be true or false');
+            }
+            // Up to 3 routes, each sharing at most 60% with the best and at most 60% longer.
+            const alternatives = body.alternatives ? { alternative_routes: { target_count: 3, share_factor: 0.6, weight_factor: 1.6 } } : {};
             call = [ORS_URL, {
                 method: 'POST',
                 headers: { Authorization: key, 'Content-Type': 'application/json', Accept: 'application/json, application/geo+json' },
-                body: JSON.stringify({ coordinates, instructions: false }),
+                body: JSON.stringify({ coordinates, instructions: false, ...alternatives }),
             }];
         }
 

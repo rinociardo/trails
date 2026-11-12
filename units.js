@@ -52,6 +52,14 @@ export function makeUnits(system = 'metric') {
             if (!finite(mps)) return '–';
             return imperial ? `${(mps * 3600 / MILE_M).toFixed(1)} mph` : `${(mps * 3.6).toFixed(1)} km/h`;
         },
+        // Speed settings: km/h or mph <-> metres per second.
+        speedUnit: imperial ? 'mph' : 'km/h',
+        speedToInput(mps) {
+            return Math.round(mps * (imperial ? 3600 / MILE_M : 3.6) * 2) / 2;
+        },
+        speedFromInput(value) {
+            return value / (imperial ? 3600 / MILE_M : 3.6);
+        },
         // Vertical speed, metres per second -> "420 m/h", "7.0 m/min", "0.12 m/s"
         // (ft/h, ft/min, ft/s); per: 'h' (default), 'min' or 's'.
         verticalSpeed(mps, per = 'h') {

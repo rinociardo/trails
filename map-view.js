@@ -25,6 +25,7 @@ function buildStyle(basemap) {
             basemap: basemap.source,
             track: { type: 'geojson', data: EMPTY },
             walked: { type: 'geojson', data: EMPTY },
+            gaps: { type: 'geojson', data: EMPTY },
             plan: { type: 'geojson', data: EMPTY },
             accuracy: { type: 'geojson', data: EMPTY },
             debug: { type: 'geojson', data: EMPTY },
@@ -56,8 +57,36 @@ function buildStyle(basemap) {
             },
             {
                 id: 'walked-line', type: 'line', source: 'walked',
+                filter: ['!', ['get', 'gap']],
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: { 'line-color': '#d6336c', 'line-width': 3 },
+            },
+            // Filled recording gaps: a guess, so dashed.
+            {
+                id: 'walked-gap-line', type: 'line', source: 'walked',
+                filter: ['get', 'gap'],
+                layout: { 'line-join': 'round' },
+                paint: { 'line-color': '#d6336c', 'line-width': 3, 'line-dasharray': [1.5, 1.5] },
+            },
+            // Reviewing a gap (Track Library): the other options grey, the chosen one pink.
+            {
+                id: 'gap-options-casing', type: 'line', source: 'gaps',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#ffffff', 'line-width': ['case', ['get', 'chosen'], 8, 6] },
+            },
+            {
+                id: 'gap-options', type: 'line', source: 'gaps',
+                layout: { 'line-join': 'round', 'line-sort-key': ['case', ['get', 'chosen'], 1, 0] },
+                paint: {
+                    'line-color': ['case', ['get', 'chosen'], '#d6336c', '#8a8f98'],
+                    'line-width': ['case', ['get', 'chosen'], 4.5, 3.5],
+                    'line-dasharray': [1.5, 1.2],
+                },
+            },
+            {
+                id: 'gap-ends', type: 'circle', source: 'gaps',
+                filter: ['==', ['geometry-type'], 'Point'],
+                paint: { 'circle-radius': 5, 'circle-color': '#d6336c', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
             },
             {
                 id: 'track-ends', type: 'circle', source: 'track',
@@ -339,12 +368,45 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
         },
 
         // segments: arrays of { lat, lon } (one per Start..Stop); empty clears it.
-        setWalked(segments) {
-            const lines = segments.filter((seg) => seg.length > 1).map((seg) => seg.map((p) => [p.lon, p.lat]));
-            const data = lines.length
-                ? { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } }
-                : EMPTY;
-            ready.then(() => map.getSource('walked').setData(data));
+        // runs: [{ gap (id or null), points }] (gaps.js splitGaps); filled gaps are dashed.
+        setWalked(runs) {
+            const line = (gap) => runs.filter((r) => (r.gap != null) === gap && r.points.length > 1)
+                .map((r) => r.points.map((p) => [p.lon, p.lat]));
+            const features = [false, true]
+                .map((gap) => ({ gap, coordinates: line(gap) }))
+                .filter((f) => f.coordinates.length)
+                .map(({ gap, coordinates }) => ({ type: 'Feature', properties: { gap }, geometry: { type: 'MultiLineString', coordinates } }));
+            ready.then(() => map.getSource('walked').setData({ type: 'FeatureCollection', features }));
+        },
+
+        // Reviewing a gap: options [{ points, chosen }], or null to clear. Fits them in view.
+        setGapReview(options) {
+            if (!options) {
+                ready.then(() => map.getSource('gaps').setData(EMPTY));
+                return;
+            }
+            const features = options.map((o, index) => ({
+                type: 'Feature',
+                properties: { index, chosen: Boolean(o.chosen) },
+                geometry: { type: 'LineString', coordinates: o.points.map((p) => [p.lon, p.lat]) },
+            }));
+            const ends = options[0] ? [options[0].points[0], options[0].points.at(-1)] : [];
+            for (const p of ends) features.push({ type: 'Feature', properties: { chosen: true }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
+            ready.then(() => map.getSource('gaps').setData({ type: 'FeatureCollection', features }));
+            const all = options.flatMap((o) => o.points);
+            if (all.length) {
+                const lons = all.map((p) => p.lon), lats = all.map((p) => p.lat);
+                map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+                    { padding: { top: 60, bottom: 220, left: 40, right: 40 }, maxZoom: 17, duration: 0 });
+            }
+        },
+
+        // The gap option under a tap (index), or null.
+        hitGapOption(point, radius = 16) {
+            const box = [[point.x - radius, point.y - radius], [point.x + radius, point.y + radius]];
+            const hit = map.queryRenderedFeatures(box, { layers: ['gap-options'] })
+                .filter((f) => !f.properties.chosen);
+            return hit.length ? hit[0].properties.index : null;
         },
 
         // Track planner: start/stop editing (handlers: see hitPlan above) and draw the plan.

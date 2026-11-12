@@ -36,6 +36,19 @@ test('relay: forwards a route request with the secret key, answers with CORS for
     assert.doesNotMatch(await res.text(), /secret-key/);
 });
 
+test('relay: alternative routes only when asked (recording gaps), at most 3', async () => {
+    const calls = fakeOrs(200, { type: 'FeatureCollection', features: [] });
+    await worker.fetch(route(TWO_POINTS), env);
+    await worker.fetch(route({ ...TWO_POINTS, alternatives: true }), env);
+    await worker.fetch(route({ ...TWO_POINTS, alternatives: false }), env);
+    const sent = calls.map((c) => JSON.parse(c.init.body));
+    assert.equal(sent[0].alternative_routes, undefined);
+    assert.deepEqual(sent[1].alternative_routes, { target_count: 3, share_factor: 0.6, weight_factor: 1.6 });
+    assert.equal(sent[2].alternative_routes, undefined);
+    assert.equal((await worker.fetch(route({ ...TWO_POINTS, alternatives: 7 }), env)).status, 400);
+    assert.equal(calls.length, 3);
+});
+
 test('relay: refuses other sites, other paths and bad requests without calling openrouteservice', async () => {
     const calls = fakeOrs(200, {});
     assert.equal((await worker.fetch(route(TWO_POINTS, 'https://evil.example'), env)).status, 403);

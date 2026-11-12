@@ -6,6 +6,8 @@ import { createMapView } from './map-view.js';
 import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
 import { fillElevationsFromDem, elevationAt, demStoreCount, clearDemStore, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
+import { GAP_MIN_MS, DEFAULT_GAP_MAX_SPEED_MPS, gapPlan, straightOption, paceBefore, gapTotals, gapNumbers, gapPathPoints, splitGaps, replaceGapPoints } from './gaps.js';
+import { fillGap, needsWork } from './gap-fill.js';
 import { ClimbCounter, WalkRates, OffTrackDetector, averageRates, walkSnapshot, restoreWalk, nextAlertMode, LEVEL_MPS, SPEED_WINDOW_MS } from './walk.js';
 import { createPlanner } from './planner.js';
 import { createGuideImport } from './guide-import.js';
@@ -32,6 +34,7 @@ const DEFAULT_SETTINGS = {
     alertMode: 'banner',    // off-track alert: 'off', 'banner' (banner only) or 'sound' (banner + sound)
     vSpeedPer: 'h',         // vertical speed per hour, 'min' or 's'
     profileShows: 'track',  // Go with a track: the profile of the 'track' or of 'walk' (my walk)
+    gapMaxSpeedMps: DEFAULT_GAP_MAX_SPEED_MPS, // recording gaps: routes implying a faster walk are dropped
     autoDimS: 60,
     maxAccuracyM: DEFAULT_TRACKING.maxAccuracyM,
     smoothWindow: DEFAULT_TRACKING.windowSize,
@@ -259,6 +262,20 @@ const rates = new WalkRates();   // current speed, vertical speed, time climbing
 // Off the track, for the numbers and the alert alike: 2 far fixes in a row
 // (filters GPS jumps), back inside 80% of the limit to clear.
 const offTrack = new OffTrackDetector({ confirmFixes: 2, backRatio: 0.8 });
+// Recording gaps (no fix for 20 s or more while hiking), filled by guessing the way (gaps.js).
+let gaps = [];
+
+// The walk's totals: what was recorded plus the filled gaps.
+function walkTotals() {
+    const g = gapTotals(gaps, settings.eleThresholdM);
+    return {
+        walked: motion.walked + g.walked,
+        movingMs: motion.movingMs + g.movingMs,
+        stoppedMs: motion.stoppedMs + g.stoppedMs,
+        ascent: climb.ascent + g.ascent,
+        descent: climb.descent + g.descent,
+    };
+}
 
 const hike = {
     running: false,
@@ -272,6 +289,10 @@ const hike = {
     offTrack: false,
     alertOverride: null, // Go › Alerts: this hike's alert mode, when not the one in Settings
     ele: {},            // DEM elevation here: { ele } or { status: 'loading' | 'unavailable' }
+    lastGood: null,     // last accepted position while hiking { lat, lon, time, ele, along, onTrack }: where a gap starts
+    gapMark: null,      // the next recorded point is the first after this gap
+    gapToFill: null,
+    continueSegment: false, // Resume after a force-close: the closed time is a gap, not a new segment
     lastAlertAt: 0,
     dimmed: false,
     savedPoints: 0,     // path.pointCount when the walk was last exported or saved as a track
@@ -459,18 +480,19 @@ function renderWalkedPath(force = false) {
     const now = Date.now();
     if (!force && now - walkedDrawnAt < WALKED_REDRAW_MS) return;
     walkedDrawnAt = now;
-    view.setWalked(path.snapshot());
+    view.setWalked(splitGaps(path.snapshot()));
     if (profileShowsWalk() && !planner.active && settings.panelOpen) renderWalkProfile();
 }
 
 // Distance actually walked and moving/stopped time (from the motion tracker).
 function renderWalk(now = Date.now()) {
     motion.tick(now);
-    const recorded = motion.movingMs + motion.stoppedMs > 0;
-    const walked = recorded ? formatDistance(motion.walked) : '–';
-    const moving = recorded ? formatDuration(motion.movingMs) : '–';
+    const totals = walkTotals();
+    const recorded = totals.movingMs + totals.stoppedMs > 0;
+    const walked = recorded ? formatDistance(totals.walked) : '–';
+    const moving = recorded ? formatDuration(totals.movingMs) : '–';
     // Average speed over moving time only; meaningless in the first minute.
-    const speed = motion.movingMs >= 60_000 ? units.speed(motion.walked / (motion.movingMs / 1000)) : '–';
+    const speed = totals.movingMs >= 60_000 ? units.speed(totals.walked / (totals.movingMs / 1000)) : '–';
     const stopped = motion.state === 'STOPPED';
     // Current speed over the last 15 s; nothing once the fixes stop coming.
     const fresh = hike.running && hike.lastFixAt && now - hike.lastFixAt < SPEED_WINDOW_MS;
@@ -479,7 +501,7 @@ function renderWalk(now = Date.now()) {
     const e = hike.ele;
     const eleText = !hike.running ? '–' : Number.isFinite(e.ele) ? formatMetres(e.ele)
         : e.status === 'unavailable' ? 'unavailable' : e.status === 'loading' ? '…' : '–';
-    const ascent = recorded ? formatMetres(climb.ascent) : '–';
+    const ascent = recorded ? formatMetres(totals.ascent) : '–';
     const per = settings.vSpeedPer;
     const v = fresh && !stopped ? rates.vertical(now) : null;
     let vertical = '–';
@@ -489,12 +511,12 @@ function renderWalk(now = Date.now()) {
 
     setText($('w-walked'), walked);
     setText($('w-moving'), moving);
-    setText($('w-stopped'), recorded ? formatDuration(motion.stoppedMs) : '–');
+    setText($('w-stopped'), recorded ? formatDuration(totals.stoppedMs) : '–');
     setText($('w-speed'), speed);
     setText($('w-speed-now'), speedNow);
     setText($('w-ele'), eleText);
     setText($('w-ascent'), ascent);
-    setText($('w-descent'), recorded ? formatMetres(climb.descent) : '–');
+    setText($('w-descent'), recorded ? formatMetres(totals.descent) : '–');
     setText($('w-vert'), vertical);
     setText($('w-vert-up'), avg.up == null ? '–' : `↑ ${units.verticalSpeed(avg.up, per)}`);
     setText($('w-vert-down'), avg.down == null ? '–' : `↓ ${units.verticalSpeed(avg.down, per)}`);
@@ -577,7 +599,7 @@ function renderDebug() {
               `need ${settings.stopTimeS} s`,
         climbLine(now),
         hike.progress ? `Snapped  ${formatDistance(hike.progress.along)}, ${formatMetres(hike.progress.offset)} off` : 'Snapped  –',
-        `Walked   ${formatDistance(motion.walked)}, ↑ ${formatMetres(climb.ascent)} ↓ ${formatMetres(climb.descent)}`,
+        `Walked   ${formatDistance(motion.walked)} + ${gaps.length} gaps ${formatDistance(walkTotals().walked - motion.walked)}, ↑ ${formatMetres(climb.ascent)} ↓ ${formatMetres(climb.descent)}`,
         `DEM here ${Number.isFinite(hike.ele.ele) ? formatMetres(hike.ele.ele, 1) : hike.ele.status || '–'}`,
     ];
     setText(box, lines.join('\n'));
@@ -610,6 +632,9 @@ function resetTrip() {
     hike.savedPoints = 0;
     climb.reset();
     rates.reset();
+    gaps = [];
+    hike.lastGood = null;
+    hike.gapMark = null;
     hike.alertOverride = null; // the Go › Alerts choice lasts one hike
     renderAlertToggle();
     renderWalk();
@@ -644,6 +669,7 @@ function saveRecording() {
         progress: hike.progress,
         savedPoints: hike.savedPoints,
         walk: walkSnapshot(climb, rates),
+        gaps,
         alertOverride: hike.alertOverride,
         savedAt: Date.now(),
     };
@@ -673,6 +699,7 @@ function restoreRecording(saved) {
         motion.restore(saved.motion);
         path.restore(saved.path);
         restoreWalk(climb, rates, saved.walk);
+        gaps = Array.isArray(saved.gaps) ? saved.gaps : [];
         hike.savedPoints = saved.savedPoints ?? 0;
         hike.alertOverride = saved.alertOverride ?? null;
         renderAlertToggle();
@@ -685,6 +712,7 @@ function restoreRecording(saved) {
         renderDebug();
         renderWalkedPath(true);
         showProfile();
+        retryGaps(); // gaps left "to be filled" when the app closed
     };
     // Stopped on purpose last time: just bring the numbers back.
     if (!saved.running) {
@@ -696,16 +724,28 @@ function restoreRecording(saved) {
     const sameTrack = saved.trackKey === trackKey();
     setText($('resume-details'),
         `Walked ${formatDistance(saved.motion.walked)} · moving ${formatDuration(saved.motion.movingMs)} · ` +
-        `stopped ${formatDuration(saved.motion.stoppedMs)}` +
+        `stopped ${formatDuration(saved.motion.stoppedMs)}` + (saved.gaps?.length ? ' (plus filled gaps)' : '') +
         (sameTrack && saved.progress ? ` · ${formatDistance(saved.progress.along)} along ${track.name || 'the track'}` : '') +
-        `. Saved ${ago < 60_000 ? 'less than a minute' : `${Math.round(ago / 60_000)} min`} ago; ` +
-        'time while the app was closed is not counted.');
+        `. Saved ${ago < 60_000 ? 'less than a minute' : `${Math.round(ago / 60_000)} min`} ago. ` +
+        'Resume fills the time the app was closed by guessing the way you walked.');
     $('resume-dialog').showModal();
     // Handled on the tap itself, so Start may use Wake Lock and sound.
     $('resume-yes').onclick = () => {
         $('resume-dialog').close();
         showTab('go');
         apply();
+        // The time the app was closed becomes a gap from the last recorded point to
+        // the first fix, filled like any other (not a new segment, not lost).
+        const last = path.segments.flat().at(-1);
+        if (last) {
+            hike.lastGood = {
+                lat: last.lat, lon: last.lon, time: last.time, ele: last.ele,
+                along: sameTrack ? saved.progress?.along ?? null : null,
+                onTrack: Boolean(sameTrack && saved.progress && saved.progress.offset <= settings.offTrackM),
+            };
+            motion.atFix = { time: saved.savedAt, movingMs: saved.motion.movingMs, stoppedMs: saved.motion.stoppedMs };
+            hike.continueSegment = true;
+        }
         startHike();
     };
     // Start fresh discards the recording; a free one that was never exported
@@ -1063,6 +1103,10 @@ function onFix(position) {
     debug.lastInterval = hike.lastFixAt ? now - hike.lastFixAt : null;
     hike.lastFixAt = now;
 
+    // No usable fix for 20 s or more (background, screen locked, closed and resumed,
+    // no GPS): a gap. Old fixes must not be averaged with the new position.
+    const gapFrom = hike.lastGood && now - hike.lastGood.time >= GAP_MIN_MS ? hike.lastGood : null;
+    if (gapFrom) smoother.reset();
     const smoothed = smoother.add(raw);
     pushLimited(debug.raw, { ...raw, accepted: Boolean(smoothed) });
     if (!smoothed) {
@@ -1073,6 +1117,7 @@ function onFix(position) {
     }
     pushLimited(debug.smooth, smoothed);
     setStatus($('gps-status'), `GPS ±${formatMetres(raw.acc)}`, 'ok');
+    if (gapFrom) startGap(gapFrom, smoothed, now);
 
     // Snap first (while moving): stop detection uses the track elevation here
     // to tell a slow steep climb from a stop.
@@ -1097,7 +1142,10 @@ function onFix(position) {
     // the walk's profile); none while the DEM can't be reached (Save as track fills them).
     if (change === 'stopped') path.stop(motion.anchor, motion.stoppedSince);
     if (change === 'resumed') path.resume(anchor, now);
-    if (!stopped) path.add({ ...smoothed, ele: demEle, time: now });
+    if (!stopped) {
+        path.add({ ...smoothed, ele: demEle, time: now, gapBefore: hike.gapMark }, { force: hike.gapMark != null });
+        hike.gapMark = null;
+    }
     if (change) saveRecording();
 
     if (settings.debug) {
@@ -1121,6 +1169,16 @@ function onFix(position) {
     const shown = stopped ? motion.anchor : smoothed;
     hike.lastFix = { lat: shown.lat, lon: shown.lon, acc: raw.acc };
     hike.ele = stopped ? elevationAt(shown.lat, shown.lon) : dem;
+    hike.lastGood = {
+        lat: shown.lat, lon: shown.lon, time: now,
+        ele: Number.isFinite(hike.ele.ele) ? hike.ele.ele : null,
+        along: track && hike.progress ? hike.progress.along : null,
+        onTrack: Boolean(track && hike.progress && !hike.offTrack),
+    };
+    if (hike.gapToFill) {
+        fillGapNow(hike.gapToFill, true);
+        hike.gapToFill = null;
+    }
     renderWalkedPath(Boolean(change));
 
     // While dimmed the map is hidden: skip redrawing it to save battery.
@@ -1129,6 +1187,204 @@ function onFix(position) {
     renderWalk(now);
     renderDebug();
 }
+
+// ---------- Recording gaps ----------
+
+// Routes implying a faster walk than this are not believed (Settings › Recording gaps).
+// Simulated GPS walks SIM_SPEEDUP× faster, so its limit is raised to match.
+const gapMaxSpeed = () => settings.gapMaxSpeedMps * (SIMULATE ? SIM_SPEEDUP : 1);
+
+// A gap ended at pos: work out how to fill it, record it, and fill it in the
+// background (never asks during the hike).
+function startGap(last, pos, now) {
+    const gapMs = Math.max(0, now - (motion.atFix?.time ?? last.time));
+    const wasStopped = motion.state === 'STOPPED';
+    const still = wasStopped && haversine(motion.anchor, pos) <= motion.radius;
+    // Stopped before the gap and gone now: you stood there at least until the gap began.
+    if (wasStopped && !still) path.add({ ...motion.anchor, ele: last.ele, time: last.time }, { force: true });
+    motion.gap(now, pos, { still });
+    climb.pause();
+    rates.clear();
+    if (still) {
+        gapNotice({ gapMs, status: 'still' });
+        return;
+    }
+    const demTo = elevationAt(pos.lat, pos.lon);
+    const from = { lat: last.lat, lon: last.lon, time: last.time, ele: last.ele };
+    const to = { lat: pos.lat, lon: pos.lon, time: now, ele: Number.isFinite(demTo.ele) ? demTo.ele : null };
+    const durationMs = now - last.time;
+    const maxSpeedMps = gapMaxSpeed();
+    // On the loaded track before and after (same limits as the off-track check)?
+    let alongAfter = null;
+    if (track && last.onTrack && last.along != null) {
+        const loc = locateOnTrack(track, pos, last.along);
+        const limit = track.points[loc.index]?.straight ? settings.offTrackStraightM : settings.offTrackM;
+        if (loc.offset <= limit) alongAfter = loc.along;
+    }
+    const plan = gapPlan({ from, to, durationMs, maxSpeedMps, track, alongBefore: alongAfter != null ? last.along : null, alongAfter });
+    const straight = straightOption(from, to, durationMs);
+    const gap = {
+        id: `gap-${now}`, from, to, gapMs, durationMs, maxSpeedMps,
+        paceMps: paceBefore(walkTotals(), maxSpeedMps), chosen: 0, options: [straight],
+    };
+    if (plan.kind === 'short') Object.assign(gap, { status: 'filled', source: 'short' });
+    else if (plan.kind === 'track') Object.assign(gap, { status: 'filled', source: 'track', options: [plan.option, straight] });
+    else if (plan.kind === 'far') Object.assign(gap, { status: 'guess', source: 'straight', note: 'too far for the trail router' });
+    else Object.assign(gap, { status: 'pending', source: 'straight', note: 'finding the trail…' });
+    gaps.push(gap);
+    hike.gapMark = gap.id;    // the next recorded point closes the gap
+    hike.gapToFill = gap;     // filled once that point is recorded (end of onFix)
+}
+
+// Draws the gap's chosen option into the recorded path and updates the totals.
+function applyGap(gap) {
+    replaceGapPoints(path.segments, gap.id, gapPathPoints(gap));
+    renderWalk();
+    renderWalkedPath(true);
+    renderGapList();
+    saveRecording();
+}
+
+async function fillGapNow(gap, announce = false) {
+    applyGap(gap);
+    const changed = await fillGap(gap);
+    if (!gaps.includes(gap)) return; // the recording was reset meanwhile
+    if (changed) applyGap(gap);
+    if (announce || (changed && gap.status !== 'pending')) gapNotice(gap);
+}
+
+// Gaps still "to be filled" (no signal, limit) or missing elevations: on the way
+// back online, when the app comes back, every minute while hiking, and on reopening.
+let retrying = false;
+async function retryGaps() {
+    if (retrying || !navigator.onLine) return;
+    retrying = true;
+    try {
+        for (const gap of gaps.filter(needsWork)) await fillGapNow(gap);
+    } finally {
+        retrying = false;
+    }
+}
+window.addEventListener('online', retryGaps);
+
+// "8 min", "45 s", "1 h 20 min".
+function formatGapDuration(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s} s`;
+    const min = Math.round(s / 60);
+    return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`;
+}
+
+const GAP_SOURCES = { route: 'along trails', track: 'along the track', short: 'straight (short)', straight: 'straight' };
+
+// A short notice, once the gap is filled (or can't be yet). Not for brief GPS holes.
+function gapNotice(gap) {
+    const paused = `Paused ${formatGapDuration(gap.gapMs)}`;
+    if (gap.status === 'still') {
+        if (gap.gapMs >= 60_000) toast(`${paused}: you hadn't moved.`, 5000);
+        return;
+    }
+    const { distance } = gapNumbers(gap, settings.eleThresholdM);
+    if (gap.gapMs < 60_000 && distance < 50) return;
+    const d = formatDistance(distance);
+    let text = `${paused}, filled straight (${d}).`;
+    if (gap.status === 'pending') text = `${paused}: ${gap.note}; straight for now.`;
+    else if (gap.status === 'guess') text = `${paused}: ${gap.note}, drawn straight (${d}, a guess).`;
+    else if (gap.source === 'route') text = `${paused}, filled from trails (${d}).`;
+    else if (gap.source === 'track') text = `${paused}, filled along the track (${d}).`;
+    toast(text, 6000);
+}
+
+// ---------- Track Library: the recording's gaps, and choosing how each was filled ----------
+
+function gapTitle(gap, i) {
+    const t = new Date(gap.from.time);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `Gap ${i + 1} · ${pad(t.getHours())}:${pad(t.getMinutes())} · ${formatGapDuration(gap.gapMs)}`;
+}
+
+function gapSummary(gap) {
+    const n = gapNumbers(gap, settings.eleThresholdM);
+    if (gap.status === 'pending') return `${formatDistance(n.distance)} straight for now (${gap.note})`;
+    const how = gap.status === 'guess' ? `straight, a guess (${gap.note})` : GAP_SOURCES[gap.source];
+    const others = gap.options.length - 1;
+    return `${formatDistance(n.distance)} ${how}${others ? ` · ${others} other option${others > 1 ? 's' : ''}` : ''}`;
+}
+
+function renderGapList() {
+    $('gap-section').hidden = gaps.length === 0;
+    $('gap-list').replaceChildren(...gaps.map((gap, i) => {
+        const row = document.createElement('div');
+        row.className = 'gap-row';
+        const label = Object.assign(document.createElement('span'), { textContent: `${gapTitle(gap, i)} · ${gapSummary(gap)}` });
+        const show = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Show' });
+        show.addEventListener('click', () => openGapReview(i));
+        row.append(label, show);
+        return row;
+    }));
+}
+
+let reviewing = null; // index of the gap shown, or null
+
+function openGapReview(i) {
+    if (hike.running) return toast('Stop the hike first (Go › Stop): then each gap can be checked on the map.');
+    reviewing = i;
+    document.body.classList.add('gap-review');
+    $('gap-review').hidden = false;
+    renderGapReview();
+}
+
+function closeGapReview() {
+    reviewing = null;
+    document.body.classList.remove('gap-review');
+    $('gap-review').hidden = true;
+    view.setGapReview(null);
+    renderLibrary();
+}
+
+function renderGapReview() {
+    const gap = gaps[reviewing];
+    if (!gap) return closeGapReview();
+    setText($('gap-review-title'), `${gapTitle(gap, reviewing)} of ${gaps.length}`);
+    const seconds = Math.max(1, gap.durationMs / 1000);
+    const names = { route: 'Trail route', track: 'Along the track', straight: 'Straight line', short: 'Straight line' };
+    let routeNo = 0;
+    $('gap-review-options').replaceChildren(...gap.options.map((o, i) => {
+        const name = o.source === 'route' ? `${names.route} ${++routeNo}` : names[o.source];
+        const b = Object.assign(document.createElement('button'), {
+            type: 'button',
+            textContent: `${name} · ${formatDistance(o.distance)} · ${units.speed(o.distance / seconds)}` +
+                (o.source === 'straight' && gap.options.length > 1 ? ' (a guess)' : ''),
+        });
+        b.setAttribute('aria-pressed', String(i === gap.chosen));
+        b.addEventListener('click', () => chooseGapOption(i));
+        return b;
+    }));
+    if (gap.status === 'pending' || gap.status === 'guess') {
+        $('gap-review-options').append(Object.assign(document.createElement('p'), { className: 'hint', textContent: `Straight because: ${gap.note}.` }));
+    }
+    $('gap-prev').disabled = reviewing === 0;
+    $('gap-next').disabled = reviewing === gaps.length - 1;
+    view.setGapReview(gap.options.map((o, i) => ({ points: o.points, chosen: i === gap.chosen })));
+}
+
+function chooseGapOption(i) {
+    const gap = gaps[reviewing];
+    if (!gap || i === gap.chosen) return;
+    gap.chosen = i;
+    applyGap(gap);
+    renderGapReview();
+    toast(`Walked is now ${formatDistance(walkTotals().walked)}.`);
+}
+
+$('gap-prev').addEventListener('click', () => { reviewing = Math.max(0, reviewing - 1); renderGapReview(); });
+$('gap-next').addEventListener('click', () => { reviewing = Math.min(gaps.length - 1, reviewing + 1); renderGapReview(); });
+$('gap-done').addEventListener('click', closeGapReview);
+view.on('click', (e) => {
+    if (reviewing == null) return;
+    const i = view.hitGapOption(e.point);
+    if (i != null) chooseGapOption(i);
+});
 
 function onGeoError(err) {
     const status = $('gps-status');
@@ -1197,6 +1453,7 @@ function startSimulation(route) {
 
     hike.simTimer = setInterval(() => {
         tick++;
+        const skipping = Date.now() < hike.simGapUntil; // Settings › Testing › Simulate a GPS gap
         if (along >= stopAt && stopLeft > 0) stopLeft--;
         else along = Math.min(route.total, along + speed);
 
@@ -1214,7 +1471,7 @@ function startSimulation(route) {
         const north = (dx / len) * side + 4 * gauss();
         const east = -(dy / len) * side + 4 * gauss();
         const accuracy = tick % 15 === 0 ? 45 : 5 + 10 * Math.random();
-        onFix({
+        if (!skipping) onFix({
             coords: {
                 latitude: p.lat + north / 111320,
                 longitude: p.lon + east / (111320 * cosLat),
@@ -1243,7 +1500,13 @@ function startHike() {
     setStatus($('gps-status'), SIMULATE ? 'Simulating GPS' : 'Waiting for GPS…', 'warn');
     requestWakeLock();
     motion.start(Date.now());
-    path.startSegment();
+    // A Stop..Start is a pause you chose: a new segment, and no gap. After a
+    // force-close, Resume carries on the segment and the closed time is a gap.
+    if (!hike.continueSegment) {
+        path.startSegment();
+        hike.lastGood = null;
+    }
+    hike.continueSegment = false;
     if (SIMULATE) {
         startSimulation(track ?? freeSimRoute());
     } else {
@@ -1259,6 +1522,7 @@ function startHike() {
         renderWalk();
         checkStaleFix();
         if (++ticks % RECORDING_SAVE_EVERY_S === 0) saveRecording();
+        if (ticks % 60 === 0) retryGaps();
     }, 1000);
     renderWalk();
     resetIdleTimer();
@@ -1279,6 +1543,7 @@ function stopHike() {
     climb.pause();
     rates.clear();
     hike.ele = {};
+    hike.lastGood = null;
     debug.eles = [];
     renderWalk();
     renderWalkedPath(true);
@@ -1330,6 +1595,8 @@ function fillSettings() {
     $('set-steep').value = settings.steepSlopeDeg;
     $('set-alerts').value = settings.alertMode;
     $('set-vspeed').value = settings.vSpeedPer;
+    $('set-gap-speed').value = units.speedToInput(settings.gapMaxSpeedMps);
+    for (const el of document.querySelectorAll('.u-speed')) el.textContent = units.speedUnit;
     demStoreCount().then((n) => setText($('dem-store-count'), n == null ? 'not supported here' : `${n} tiles`));
     $('set-autodim').value = String(settings.autoDimS);
     $('set-window').value = settings.smoothWindow;
@@ -1445,6 +1712,16 @@ $('set-simulate').addEventListener('change', (e) => {
     location.reload();
 });
 
+// No fixes for a minute while the simulation walks on: the app sees a gap, as after
+// the phone was locked (except that the clocks keep ticking).
+hike.simGapUntil = 0;
+$('sim-gap-btn').addEventListener('click', () => {
+    if (!SIMULATE || !hike.running) return toast('Turn on Simulated GPS and press Go › Start first.');
+    hike.simGapUntil = Date.now() + 60_000;
+    showTab('go');
+    toast('No GPS for 1 minute: the gap is filled when fixes come back.', 4000);
+});
+
 $('reset-trip-btn').addEventListener('click', async () => {
     if (walkUnsaved()) {
         if (await keepRecording('Resetting walked/time')) resetTrip();
@@ -1462,6 +1739,14 @@ $('set-alerts').addEventListener('change', (e) => {
     }
     renderAlertToggle();
     renderStats();
+});
+
+$('set-gap-speed').addEventListener('change', (e) => {
+    const typed = Number(e.target.value);
+    const mps = Number.isFinite(typed) && e.target.value !== '' ? units.speedFromInput(typed) : DEFAULT_GAP_MAX_SPEED_MPS;
+    settings.gapMaxSpeedMps = Math.min(20 / 3.6, Math.max(2 / 3.6, mps));
+    e.target.value = units.speedToInput(settings.gapMaxSpeedMps);
+    saveSettings();
 });
 
 $('set-vspeed').addEventListener('change', (e) => {
@@ -1538,15 +1823,30 @@ async function exportHike() {
     const base = track?.name || 'Free recording';
     const name = track ? `${base} (walked)` : base;
     // Free recordings (or a track without elevations): say so, to fill from a DEM later.
-    const walked = `Walked ${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}`;
-    const desc = path.hasElevations
-        ? `${walked}, ascent ${formatMetres(climb.ascent)}, descent ${formatMetres(climb.descent)}`
+    const totals = walkTotals();
+    const walked = `Walked ${formatDistance(totals.walked)}, moving ${formatDuration(totals.movingMs)}`;
+    let desc = path.hasElevations
+        ? `${walked}, ascent ${formatMetres(totals.ascent)}, descent ${formatMetres(totals.descent)}`
         : `${walked}. ${NO_ELEVATION_DESC}`;
+    if (gaps.length) desc += `. ${gaps.length} recording gap${gaps.length > 1 ? 's' : ''} filled by guessing the way (segments whose points say "Gap filled", without a GPS fix)`;
     const pointCount = path.pointCount;
-    const exported = await exportGpx(buildGpx({ name, desc, segments: path.snapshot(), time: start }),
+    const exported = await exportGpx(buildGpx({ name, desc, segments: exportSegments(), time: start }),
         gpxFileName(track ? `${base} walked` : base, start), name);
     if (exported) markWalkSaved(pointCount);
     return exported;
+}
+
+// The recorded path for GPX export: each filled gap is a segment of its own, its
+// points labelled with what filled it (<type>) and the filled ones marked <fix>none</fix>.
+function exportSegments() {
+    return splitGaps(path.snapshot()).map((run) => {
+        if (run.gap == null) return run.points;
+        const gap = gaps.find((g) => g.id === run.gap);
+        const how = !gap ? 'a straight line' : gap.status === 'pending' ? 'a straight line, not filled yet'
+            : gap.source === 'route' ? 'a trail route (a guess)' : gap.source === 'track' ? 'the planned track'
+                : gap.status === 'guess' ? 'a straight line (a guess)' : 'a straight line (short)';
+        return run.points.map((p) => ({ ...p, type: `Gap filled with ${how}`, fix: p.gap ? 'none' : undefined }));
+    });
 }
 
 // ---------- Keeping recordings: Save as track, saved walks, "keep it?" ----------
@@ -1568,7 +1868,7 @@ function markWalkSaved(pointCount = path.pointCount) {
 function keepRecording(action) {
     if (!walkUnsaved()) return Promise.resolve(true);
     setText($('keep-details'),
-        `Your walk (${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}` +
+        `Your walk (${formatDistance(walkTotals().walked)}, moving ${formatDuration(walkTotals().movingMs)}` +
         `${track ? ` along “${track.name || 'the track'}”` : ', no track'}) hasn't been exported or saved as a track. ` +
         `${action} clears it.`);
     const dialog = $('keep-dialog');
@@ -1704,10 +2004,11 @@ function renderLibraryStatus() {
     unload.textContent = track?.temporary ? 'Remove test loop' : 'Unload track';
     const recorded = path.pointCount >= 2;
     setText($('lib-recording'), recorded
-        ? `Walked ${formatDistance(motion.walked)} · moving ${formatDuration(motion.movingMs)}` +
+        ? `Walked ${formatDistance(walkTotals().walked)} · moving ${formatDuration(walkTotals().movingMs)}` +
           `${track ? ` along “${track.name || 'the track'}”` : ' (free recording)'}` +
           `${hike.running ? ' · recording now' : ''}${walkUnsaved() ? ' · not exported or saved yet' : ' · saved'}`
         : 'Nothing recorded. Go › Start records a walk.');
+    renderGapList();
 }
 
 async function renderLibrary() {
@@ -1817,6 +2118,7 @@ function showTab(tab) {
     }
     $('layers-panel').hidden = true;
     if (track && settings.profileShows === 'walk') showProfile(); // My walk shows on Go only
+    if (reviewing != null) closeGapReview();
     if (tab === 'library') renderLibrary();
     if (tab === 'settings') fillSettings();
     if (tab !== 'plan') {
@@ -1958,6 +2260,7 @@ document.addEventListener('visibilitychange', () => {
     audioCtx?.resume().catch(() => {});
     checkStaleFix();
     checkForUpdate();
+    retryGaps();
 });
 
 // ---------- Start-up ----------

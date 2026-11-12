@@ -331,6 +331,28 @@
             padding: 7px 12px; border-radius: 8px; border: 1px solid var(--on-brand-muted);
             background: transparent; color: var(--on-brand); font-weight: 600;
         }
+        .floating-box {
+            position: fixed;
+            left: 8px; right: 8px; bottom: calc(var(--bottom-h, 120px) + 8px);
+            z-index: 1150;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: var(--panel); color: var(--panel-text);
+            box-shadow: 0 2px 12px rgba(0,0,0,.3);
+            font-size: 14px;
+        }
+        #gap-review-title { font-weight: 700; margin-bottom: 6px; }
+        #gap-review-options { display: flex; flex-direction: column; gap: 4px; }
+        #gap-review-options button {
+            text-align: left; padding: 6px 8px; border-radius: 8px;
+            border: 1px solid var(--panel-border); background: none; color: var(--panel-text); font: inherit;
+        }
+        #gap-review-options button[aria-pressed="true"] { border-color: #d6336c; box-shadow: inset 3px 0 0 #d6336c; font-weight: 600; }
+        #gap-review .actions { margin-top: 8px; grid-template-columns: 1fr 1fr 1fr; }
+        #gap-review .primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+        body.gap-review #library-page { display: none; }
+        .gap-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
+        .gap-row button { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text); }
         #search-results {
             position: fixed;
             top: calc(var(--stats-h, 0px) + 6px);
@@ -644,6 +666,17 @@
         <p class="hint">Planned: a topographic map, a hiking-trail overlay and mobile coverage. The map needs a connection (offline maps come with Stage 3).</p>
     </div>
 
+    <!-- Track Library › Gaps › Show: one gap's options on the map. -->
+    <div id="gap-review" class="floating-box" data-tabs="library" hidden>
+        <div id="gap-review-title"></div>
+        <div id="gap-review-options"></div>
+        <div class="actions">
+            <button type="button" id="gap-prev">‹ Previous</button>
+            <button type="button" id="gap-next">Next ›</button>
+            <button type="button" class="primary-action" id="gap-done">Done</button>
+        </div>
+    </div>
+
     <!-- Go: the next waypoint of the track (trail guides). Tap for the whole note. -->
     <button type="button" id="next-waypoint" data-tabs="go" hidden></button>
 
@@ -727,6 +760,11 @@
             <button type="button" id="save-walk-lib-btn">Save as track</button>
             <button type="button" class="danger" id="reset-trip-btn">Reset walked/time</button>
         </div>
+        <div id="gap-section" hidden>
+            <h4>Gaps in the recording</h4>
+            <div id="gap-list"></div>
+            <p class="hint">While the app was in the background, the screen locked, the app closed, or GPS had no fix, the way you walked was guessed: along the track if you were on it before and after, else along trails (up to 3 routes that fit your walking speed), else a straight line. Filled gaps are dashed on the map. <b>Show</b> one to see the other routes in grey and tap one to switch: the totals follow.</p>
+        </div>
         <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop) and its elevation from the DEM (none for points recorded with no signal in an area not stored on the device). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file. GPX files always store metres (the GPX standard); the description inside gives the totals in your units.</p>
     </section>
 
@@ -783,6 +821,12 @@
         </label>
         <p class="hint">More fixes give a steadier position but it trails behind you: about half a second per fix (5 fixes ≈ 2 s ≈ 3 m at walking pace).</p>
 
+        <h3>Recording gaps</h3>
+        <label class="field"><span>Fill gaps with routes walkable at up to (<span class="u-speed">km/h</span>)</span>
+            <input type="number" id="set-gap-speed" min="2" max="20" step="0.5" inputmode="decimal">
+        </label>
+        <p class="hint">When the app was in the background, locked or closed during a hike, or GPS had no fix for 20 s or more, the way you walked is guessed (Track Library › Gaps). Trail routes that would need a faster walk than this in the time you were gone are left out.</p>
+
         <h3>Stop detection</h3>
         <label class="field"><span>Stopped when within (<span class="u-len">m</span>)</span>
             <input type="number" id="set-stopradius" inputmode="numeric">
@@ -825,6 +869,7 @@
         <div class="actions">
             <button type="button" id="test-loop-btn">Test loop here</button>
             <button type="button" id="sample-btn">Load sample track</button>
+            <button type="button" id="sim-gap-btn">Simulate a 1-minute GPS gap</button>
         </div>
         <p class="hint">"Test loop here" draws a square loop of about 800 m starting where you stand, for a walk-around test. It is not kept when you close the app, unless a hike with it is in progress.</p>
 

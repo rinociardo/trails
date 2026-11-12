@@ -14,6 +14,9 @@ export const DEFAULT_TRACKING = {
 // Old fixes never enter the average, e.g. after the app was in the background.
 const WINDOW_MAX_AGE_MS = 30_000;
 const HISTORY_LIMIT = 600;
+// The app ticks the clocks every second. A longer wait means it was suspended (in
+// the background, screen locked): that time is left to the gap (see gaps.js).
+export const MAX_TICK_MS = 10_000;
 
 // Accuracy-weighted moving average of the last few good fixes.
 // Weight = 1 / accuracy², so a ±5 m fix counts four times as much as a ±10 m one.
@@ -99,6 +102,7 @@ export class MotionTracker {
         this.history = [];   // { lat, lon, ele, time, walked } while moving
         this.lastPoint = null;
         this.lastTick = null; // null while paused
+        this.atFix = null;    // { time, movingMs, stoppedMs } at the last fix: where a gap starts
     }
 
     start(now) {
@@ -122,15 +126,42 @@ export class MotionTracker {
     tick(now) {
         if (this.lastTick == null) return;
         const dt = Math.max(0, now - this.lastTick);
+        this.lastTick = now;
+        if (dt > MAX_TICK_MS) return; // suspended: the gap accounts for it
         if (this.state === 'STOPPED') this.stoppedMs += dt;
         else this.movingMs += dt;
-        this.lastTick = now;
+    }
+
+    // A gap in the fixes ended at pos: the clocks go back to the last fix (the gap
+    // decides what that time was), and walking carries on from pos without counting
+    // the jump. still: you are inside the stop area, so you stood there all along.
+    gap(now, pos, { still = false } = {}) {
+        this.tick(now);
+        if (this.atFix) {
+            this.movingMs = this.atFix.movingMs;
+            this.stoppedMs = this.atFix.stoppedMs;
+            if (still) this.stoppedMs += Math.max(0, now - this.atFix.time);
+        }
+        this.history = [];
+        if (!still) {
+            this.state = 'MOVING';
+            this.stoppedSince = null;
+            this.anchor = null;
+            this.lastPoint = { lat: pos.lat, lon: pos.lon };
+        }
+        this.atFix = { time: now, movingMs: this.movingMs, stoppedMs: this.stoppedMs };
     }
 
     // pos: smoothed position; acc: accuracy of the current fix; ele: track
     // elevation at the snapped position (null without a track or elevations).
     // Returns 'stopped' or 'resumed' on a state change, otherwise null.
     update(pos, acc, now, ele = null) {
+        const change = this.step(pos, acc, now, ele);
+        this.atFix = { time: now, movingMs: this.movingMs, stoppedMs: this.stoppedMs };
+        return change;
+    }
+
+    step(pos, acc, now, ele) {
         this.tick(now);
         this.radius = Math.max(this.stopRadiusM, acc || 0);
 
@@ -252,7 +283,9 @@ export class PathRecorder {
         const seg = this.current();
         const last = seg[seg.length - 1];
         if (!force && last && haversine(last, p) < this.minDistanceM) return;
-        seg.push({ lat: p.lat, lon: p.lon, ele: Number.isFinite(p.ele) ? p.ele : null, time: p.time });
+        const point = { lat: p.lat, lon: p.lon, ele: Number.isFinite(p.ele) ? p.ele : null, time: p.time };
+        if (p.gapBefore != null) point.gapBefore = p.gapBefore; // first fix after a filled gap (gaps.js)
+        seg.push(point);
     }
 
     // Called when MotionTracker reports 'stopped' (centre, since = stoppedSince).

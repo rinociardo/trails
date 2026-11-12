@@ -80,6 +80,9 @@ export function buildGpx({ name = '', desc = '', segments, waypoints = [], time 
         let inner = '';
         if (Number.isFinite(p.ele)) inner += `<ele>${p.ele.toFixed(1)}</ele>`;
         if (Number.isFinite(p.time)) inner += `<time>${new Date(p.time).toISOString()}</time>`;
+        // A filled recording gap: what filled it (<type>), and no GPS fix (<fix>none</fix>).
+        if (p.type) inner += `<type>${escapeXml(p.type)}</type>`;
+        if (p.fix) inner += `<fix>${p.fix}</fix>`;
         return `      <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lon.toFixed(7)}">${inner}</trkpt>`;
     };
     const wpt = (w) => {

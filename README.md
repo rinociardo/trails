@@ -27,6 +27,8 @@ Live site (once published): https://rinociardo.github.io/trails/
 | `router.js` | Trail routing (openrouteservice); the only file that talks to the routing service |
 | `relay/` | The Trails relay (Cloudflare Worker) holding the openrouteservice key: routes and place search; deployed separately, see `relay/README.md` |
 | `walk.js` | Live walk numbers: ascent/descent from the DEM, current and vertical speed, off-track state, alert modes (unit-tested) |
+| `gaps.js` | Recording gaps: how to fill them (straight, track, trail routes), time split, path and export runs (unit-tested) |
+| `gap-fill.js` | Fills gaps in the background: route alternatives through the relay, DEM elevations, retry when back online |
 | `tracker.js` | GPS smoothing, moving/stopped detection, walked distance and times, the walked path for export (unit-tested) |
 | `profile-chart.js` | The elevation profile chart in the trip panel |
 | `map-view.js` | Everything MapLibre: track, position dot, follow mode, 3D terrain hook |
@@ -80,7 +82,7 @@ The steps are in the order you should run them.
 5. **Resume after a force-close.** In the Home Screen app: Settings › Testing › **Simulated GPS** on (the app reloads), load the sample track, press Start, and wait at least 30 s (Walked shows a distance). Swipe up to the app switcher and swipe Trails away. Reopen it from the Home Screen.
    *Expect:* a **Resume hike?** box with your walked distance, moving/stopped time and progress. Tap **Resume**: the numbers continue from there, the hike is running, and the map shows the track and dot (if the map stays blank, tell me: that would be the map's background worker failing).
    Repeat and tap **Start fresh**: everything resets, and the next reopen doesn't ask.
-   At most the last 10 s of a recording can be lost; time while the app was closed is not counted.
+   At most the last 10 s of a recording can be lost. Since v0.13.0 the time the app was closed is filled as a recording gap (step 30).
    Afterwards, turn **Simulated GPS** off again (Settings › Testing) before any real walk.
 6. **Sound check.** Settings › Alerts › Off-track alert › **Banner + sound**: it beeps right away. (Set it back to Banner only afterwards if you prefer no sound.) Try it with the side ring/silent switch on and off, and note whether you hear it.
 7. **Real GPS.** Outdoors, from the Home Screen app: Settings › Testing › Test loop here, press Start, allow location.
@@ -170,6 +172,15 @@ The steps are in the order you should run them.
    **Settings › Alerts › Off-track alert:** Off / Banner only / Banner + sound. It starts at **Banner only** even if sound was on before v0.12.0.
    On a planned track's straight (dashed) segments the wider limit applies (100 m by default) to the numbers as well as the banner.
    **Profile:** Track / **My walk** above the profile switches between the planned track (marker where you are) and your walk so far; Explore always shows the track.
+
+30. **Recording gaps (v0.13.0).** The relay needs redeploying first for route alternatives (`relay/README.md`, "Updating the relay"); without it gaps still fill, with one route each.
+   **Simulated** (indoors): Settings › Testing › Simulated GPS on, no track, Go › Start, wait 20 s, then Settings › Testing › **Simulate a 1-minute GPS gap**. *Expect:* on Go, after about a minute, a toast "Paused 1 min, filled from trails (… m)"; Walked jumps by that distance; the pink line has a **dashed** stretch. Stop, Track Library: **Gaps in the recording** lists it ("… along trails · 2 other options"). **Show**: the map shows the gap, the chosen route pink, the others grey and dashed; tap a grey line (or its button): it turns pink and Walked changes. Done.
+   **No signal:** Airplane Mode on (Location stays on), simulate another gap. *Expect:* "…: no signal: filled when back online; straight for now". Airplane Mode off: within a minute "…filled from trails".
+   **On a track:** load the sample, Start (simulated), simulate a gap. *Expect:* "Paused 1 min, filled along the track" (no request needed).
+   **Real, screen locked:** outdoors, Go › Start, walk a minute, **lock the phone** and keep walking 5–10 minutes along a path (ideally with a fork), unlock and open Trails. *Expect:* within a few seconds "Paused 7 min, filled from trails (… m)", Walked and Moving include the gap, and Stopped grows only if you walked slower than your pace before. Repeat standing still while locked: "Paused …: you hadn't moved" (Stopped grows).
+   **Real, app closed:** Start, walk, swipe Trails away in the app switcher, walk 5 minutes, reopen, **Resume**. *Expect:* the same kind of toast; the pink line carries on (dashed across the gap) instead of starting a new piece.
+   **Export my hike:** *Expect:* each gap is a segment of its own; its points say `<type>Gap filled with a trail route (a guess)</type>` and the filled ones `<fix>none</fix>`; the description says how many gaps were filled.
+   **Setting:** Settings › Recording gaps › "Fill gaps with routes walkable at up to 7 km/h" (or 4.5 mph): lower it and routes that would need a faster walk are left out (the gap then shows "too long or too fast for walking", drawn straight).
 
 ### If Wake Lock fails
 
