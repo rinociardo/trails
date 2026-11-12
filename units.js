@@ -52,6 +52,15 @@ export function makeUnits(system = 'metric') {
             if (!finite(mps)) return '–';
             return imperial ? `${(mps * 3600 / MILE_M).toFixed(1)} mph` : `${(mps * 3.6).toFixed(1)} km/h`;
         },
+        // Vertical speed, metres per second -> "420 m/h", "7.0 m/min", "0.12 m/s"
+        // (ft/h, ft/min, ft/s); per: 'h' (default), 'min' or 's'.
+        verticalSpeed(mps, per = 'h') {
+            if (!finite(mps)) return '–';
+            const seconds = { h: 3600, min: 60, s: 1 }[per] ?? 3600;
+            const v = Math.abs(mps) * seconds / lengthM;
+            const decimals = per === 'h' ? 0 : per === 'min' ? 1 : 2;
+            return `${v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })} ${lengthUnit}/${per}`;
+        },
         // A settings field: metres <-> the number typed in the current unit.
         toInput(m, step = 1) {
             return Math.round(m / lengthM / step) * step;

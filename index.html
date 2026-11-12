@@ -108,6 +108,22 @@
             font-size: 12px; color: var(--panel-muted); font-variant-numeric: tabular-nums;
         }
         .walk-row b { color: var(--panel-text); font-weight: 600; }
+        .walk-grid {
+            display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 8px;
+            margin-top: 6px; font-variant-numeric: tabular-nums;
+        }
+        .walk-grid > div { display: flex; flex-direction: column; min-width: 0; }
+        .walk-grid span { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--panel-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .walk-grid b { font-size: 13px; font-weight: 600; color: var(--panel-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .walk-grid .walk-action { justify-content: flex-end; font-size: 12px; }
+        .walk-note { margin-top: 2px; font-size: 11px; color: var(--panel-muted); }
+        .off-track-line { margin-bottom: 4px; font-size: 14px; font-weight: 700; color: var(--danger); }
+        .profile-switch { display: flex; gap: 4px; margin-top: 6px; font-size: 12px; }
+        .profile-switch button {
+            padding: 2px 10px; border-radius: 999px; border: 1px solid var(--panel-border);
+            background: none; color: var(--panel-muted); font: inherit;
+        }
+        .profile-switch button[aria-pressed="true"] { background: var(--panel-text); border-color: var(--panel-text); color: var(--panel); }
         .link-btn {
             padding: 0; border: 0; background: none;
             font: inherit; font-weight: 600; color: var(--profile-marker);
@@ -251,6 +267,8 @@
         /* Track planner: its own top bar and toolbar; the panel keeps only the profile. */
         body:not(.plan-mode) .plan-only, body.plan-mode .plan-hide { display: none !important; }
         body.plan-mode #profile { display: block !important; }
+        /* No track: the profile is the walk's own, shown on Go only. */
+        body.free-mode:not(.plan-mode):not([data-tab="go"]) #profile { display: none; }
         #plan-type { font-size: 13px; }
         #plan-type.active { border-color: var(--profile-marker); color: var(--profile-marker); }
         .plan-bar { display: flex; flex-direction: column; gap: 4px; }
@@ -539,16 +557,17 @@
         <div class="stat-row" data-tabs="go">
             <div class="stat track-only"><span class="stat-label">Done</span><span class="stat-value" id="stat-done">–</span></div>
             <div class="stat track-only"><span class="stat-label">Remaining</span><span class="stat-value" id="stat-remaining">–</span></div>
-            <div class="stat track-only"><span class="stat-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
+            <div class="stat track-only"><span class="stat-label" id="stat-offset-label">From track</span><span class="stat-value" id="stat-offset">–</span></div>
             <div class="stat free-only"><span class="stat-label">Walked</span><span class="stat-value" id="stat-walked">–</span></div>
             <div class="stat free-only"><span class="stat-label">Moving</span><span class="stat-value" id="stat-moving">–</span></div>
-            <div class="stat free-only"><span class="stat-label">Avg speed</span><span class="stat-value" id="stat-speed">–</span></div>
+            <div class="stat free-only"><span class="stat-label">Speed</span><span class="stat-value" id="stat-speed">–</span></div>
         </div>
         <div class="status-row" data-tabs="go">
             <span id="track-status">No track</span>
             <span id="gps-status">GPS off</span>
             <span id="motion-status" hidden></span>
             <button type="button" id="wake-status" hidden></button>
+            <button type="button" id="alert-toggle" class="track-only" aria-label="Off-track alerts for this hike">Alerts: banner</button>
         </div>
         <h1 class="page-title" data-tabs="library">Track Library</h1>
         <h1 class="page-title" data-tabs="settings">Settings</h1>
@@ -634,6 +653,7 @@
             <span class="chevron" aria-hidden="true">▾</span>
         </button>
         <div id="trip-body">
+            <div class="off-track-line track-only plan-hide" id="off-track-line" data-tabs="go" hidden></div>
             <table class="trip-table track-only plan-hide">
                 <thead>
                     <tr><th></th><th>Done</th><th>Remaining</th><th>Total</th></tr>
@@ -644,7 +664,11 @@
                     <tr><th>Descent</th><td id="t-desc-done">–</td><td id="t-desc-rem">–</td><td id="t-desc-total">–</td></tr>
                 </tbody>
             </table>
-            <div class="profile track-only" id="profile" aria-label="Elevation profile">
+            <div class="profile-switch track-only plan-hide" id="profile-switch" data-tabs="go" role="group" aria-label="Profile shows">
+                <button type="button" data-show="track" aria-pressed="true">Track</button>
+                <button type="button" data-show="walk" aria-pressed="false">My walk</button>
+            </div>
+            <div class="profile" id="profile" aria-label="Elevation profile">
                 <canvas></canvas>
                 <div class="profile-line" hidden></div>
                 <div class="profile-dot" hidden></div>
@@ -658,13 +682,22 @@
                 <button type="button" class="link-btn" id="fill-ele-btn">Fill elevations</button>
                 <button type="button" class="link-btn danger" id="clear-btn">Unload track</button>
             </div>
-            <div class="walk-row plan-hide" data-tabs="go">
-                <span>Walked <b id="w-walked">–</b></span>
-                <span>Moving <b id="w-moving">–</b></span>
-                <span>Stopped <b id="w-stopped">–</b></span>
-                <span>Avg <b id="w-speed">–</b></span>
-                <button type="button" class="link-btn" id="save-walk-btn" hidden>Save as track</button>
+            <!-- My walk: always shown, with or without a track. -->
+            <div class="walk-grid plan-hide" data-tabs="go" aria-label="My walk">
+                <div><span>Walked</span><b id="w-walked">–</b></div>
+                <div><span>Moving</span><b id="w-moving">–</b></div>
+                <div><span>Stopped</span><b id="w-stopped">–</b></div>
+                <div><span>Avg speed</span><b id="w-speed">–</b></div>
+                <div><span>Speed</span><b id="w-speed-now">–</b></div>
+                <div><span>Elevation</span><b id="w-ele">–</b></div>
+                <div><span>Ascent</span><b id="w-ascent">–</b></div>
+                <div><span>Descent</span><b id="w-descent">–</b></div>
+                <div><span>Vertical</span><b id="w-vert">–</b></div>
+                <div><span>Avg up</span><b id="w-vert-up">–</b></div>
+                <div><span>Avg down</span><b id="w-vert-down">–</b></div>
+                <div class="walk-action"><button type="button" class="link-btn" id="save-walk-btn" hidden>Save as track</button></div>
             </div>
+            <div class="walk-note plan-hide" id="walk-note" data-tabs="go" hidden></div>
         </div>
     </section>
 
@@ -694,7 +727,7 @@
             <button type="button" id="save-walk-lib-btn">Save as track</button>
             <button type="button" class="danger" id="reset-trip-btn">Reset walked/time</button>
         </div>
-        <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop; elevations come from the route where you were on it; a free recording, made with no track loaded, has none and says so in the file). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file. GPX files always store metres (the GPX standard); the description inside gives the totals in your units.</p>
+        <p class="hint">"Export track" saves the loaded route with its elevations. "Export my hike" saves the path you actually walked, with the time of each point (one segment per Start/Stop) and its elevation from the DEM (none for points recorded with no signal in an area not stored on the device). On iPhone and in Safari on the Mac the Share sheet opens: Save to Files, AirDrop, Messages. Other browsers download the file. GPX files always store metres (the GPX standard); the description inside gives the totals in your units.</p>
     </section>
 
     <!-- Settings: preferences only. -->
@@ -706,6 +739,13 @@
                 <option value="imperial">miles and feet</option>
             </select>
         </label>
+        <label class="field">Vertical speed
+            <select id="set-vspeed">
+                <option value="h">per hour</option>
+                <option value="min">per minute</option>
+                <option value="s">per second</option>
+            </select>
+        </label>
 
         <h3>Alerts</h3>
         <label class="field"><span>Off-track distance (<span class="u-len">m</span>)</span>
@@ -714,10 +754,14 @@
         <label class="field"><span>…on straight (cross-country) segments (<span class="u-len">m</span>)</span>
             <input type="number" id="set-offtrack-straight" inputmode="numeric">
         </label>
-        <label class="field">Sound with off-track alert
-            <input type="checkbox" id="set-sound">
+        <label class="field">Off-track alert
+            <select id="set-alerts">
+                <option value="off">Off</option>
+                <option value="banner">Banner only</option>
+                <option value="sound">Banner + sound</option>
+            </select>
         </label>
-        <p class="hint">Straight segments of a planned track have no path to follow, so you may stray further from the line there.</p>
+        <p class="hint">Straight segments of a planned track have no path to follow, so you may stray further from the line there. Whatever the alert, Go shows "Off track" and how far the track is, and Remaining shows "—" until you are back on it. The Alerts button on Go changes it for the current hike only.</p>
 
         <h3>Screen and battery</h3>
         <label class="field">Auto-dim while hiking
@@ -755,7 +799,10 @@
         <label class="field"><span>Ignore climbs/drops smaller than (<span class="u-len">m</span>)</span>
             <input type="number" id="set-elethreshold" inputmode="numeric">
         </label>
-        <p class="hint">Removes small ups and downs from total ascent/descent. Compare with Maps 3D PRO on the same GPX to tune it. Tracks without elevations (free recordings, GPX files without them, the test loop) get them from a DEM (Digital Elevation Model) when online; Go › Fill elevations retries after being offline.</p>
+        <p class="hint">Removes small ups and downs from total ascent/descent. Compare with Maps 3D PRO on the same GPX to tune it. Tracks without elevations (free recordings, GPX files without them, the test loop) get them from a DEM (Digital Elevation Model) when online; Go › Fill elevations retries after being offline. While you walk, your elevation, ascent and descent come from the same DEM at your position (never GPS altitude).</p>
+        <p class="lib-line">Elevation tiles stored on this device: <span id="dem-store-count">–</span></p>
+        <div class="actions"><button type="button" id="dem-clear-btn">Clear stored elevation tiles</button></div>
+        <p class="hint">Each tile covers about 1.7 km (1 mi) and is kept once downloaded (at most 600, about 60 MB), so walking again in an area you have walked or loaded a track in works without signal. With no signal anywhere else, Go shows "elevation unavailable".</p>
 
         <h3>Planning</h3>
         <label class="field">Warn when a straight segment crosses slopes steeper than (degrees)
@@ -834,11 +881,12 @@
     <div id="dim-overlay" hidden>
         <div class="track-only"><div class="dim-value" id="dim-done">–</div><div class="dim-label">Done</div></div>
         <div class="track-only"><div class="dim-value" id="dim-remaining">–</div><div class="dim-label">Remaining</div></div>
-        <div class="track-only"><div class="dim-value" id="dim-offset">–</div><div class="dim-label">From track</div></div>
+        <div class="track-only"><div class="dim-value" id="dim-offset">–</div><div class="dim-label" id="dim-offset-label">From track</div></div>
         <div class="track-only"><div class="dim-value" id="dim-climb">–</div><div class="dim-label">Climb left</div></div>
         <div class="free-only"><div class="dim-value" id="dim-walked">–</div><div class="dim-label">Walked</div></div>
         <div class="free-only"><div class="dim-value" id="dim-moving">–</div><div class="dim-label">Moving</div></div>
-        <div class="free-only"><div class="dim-value" id="dim-speed">–</div><div class="dim-label">Avg speed</div></div>
+        <div class="free-only"><div class="dim-value" id="dim-speed">–</div><div class="dim-label">Speed</div></div>
+        <div class="free-only"><div class="dim-value" id="dim-ascent">–</div><div class="dim-label">Ascent</div></div>
         <div class="dim-label" id="dim-motion"></div>
         <div id="dim-next" hidden></div>
         <div id="dim-hint">Tap anywhere to show the map</div>

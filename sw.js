@@ -1,8 +1,10 @@
 // Offline support for the app itself (not map tiles).
 // Bump VERSION on every release: it names the cache and is shown in Settings.
-const VERSION = '0.11.0';
+const VERSION = '0.12.0';
 const CACHE_PREFIX = 'trails-';
 const CACHE = `${CACHE_PREFIX}${VERSION}`;
+// Elevation tiles stored by the page (dem-tiles.js): kept across versions.
+const KEEP_CACHES = ['trails-dem-tiles'];
 
 // How long to wait for the network before using the saved copy (weak signal).
 const NETWORK_TIMEOUT_MS = 3000;
@@ -24,6 +26,7 @@ const APP_FILES = [
     './geocoder.js',
     './units.js',
     './tracker.js',
+    './walk.js',
     './profile-chart.js',
     './map-view.js',
     './map-config.js',
@@ -53,7 +56,7 @@ self.addEventListener('activate', (event) => {
         caches.keys()
             // Only our own caches: other apps on the same github.io site share this storage.
             .then((keys) => Promise.all(keys
-                .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE)
+                .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE && !KEEP_CACHES.includes(key))
                 .map((key) => caches.delete(key))))
             .then(() => self.clients.claim())
     );

@@ -21,11 +21,12 @@ Live site (once published): https://rinociardo.github.io/trails/
 | `gpx.js` | Reads GPX files and writes them for export (unit-tested) |
 | `elevation.js` | Ascent/descent (5 m threshold) and elevation at any point of the track (unit-tested) |
 | `dem.js` | Elevations from DEM tiles: tile maths, terrarium decoding, interpolation (unit-tested) |
-| `dem-tiles.js` | Downloads and decodes the DEM tiles in the browser (keeps the last 48 in memory) |
+| `dem-tiles.js` | Downloads and decodes the DEM tiles in the browser (the last 48 in memory, up to 600 stored on the device for walking without signal); elevation at your position |
 | `plan.js` | Track planning: points, segments, undo, sampling, slope, simplifying (unit-tested) |
 | `planner.js` | The planner screen: map editing, trail routing and fallbacks, live totals, steep warning, save/export |
 | `router.js` | Trail routing (openrouteservice); the only file that talks to the routing service |
 | `relay/` | The Trails relay (Cloudflare Worker) holding the openrouteservice key: routes and place search; deployed separately, see `relay/README.md` |
+| `walk.js` | Live walk numbers: ascent/descent from the DEM, current and vertical speed, off-track state, alert modes (unit-tested) |
 | `tracker.js` | GPS smoothing, moving/stopped detection, walked distance and times, the walked path for export (unit-tested) |
 | `profile-chart.js` | The elevation profile chart in the trip panel |
 | `map-view.js` | Everything MapLibre: track, position dot, follow mode, 3D terrain hook |
@@ -75,19 +76,19 @@ The steps are in the order you should run them.
    Load one of your own GPX files that you also have in Maps 3D PRO and compare ascent/descent (see "Comparing with Maps 3D PRO" below).
 4. **Simulation.** Turn on Settings › Testing › **Simulated GPS** (or open the site with `?sim` in a Safari tab), turn on Settings › Testing › Debug view, set Auto-dim to Never (so the screen stays on the map), load the sample track, press Start.
    *Expect:* Done/Remaining and the profile marker move. At about 1:50 the top bar shows **Stopped 0:30** and the timer keeps counting; Walked stays still. At about 2:05 it says Moving again.
-   At about 3:30 a red OFF TRACK banner appears with a beep, then "Back on track". The debug box shows a few **DISCARDED** fixes (deliberate bad fixes).
+   At about 3:30 a red OFF TRACK banner appears (no beep: the default is Banner only), Remaining shows "—" and the panel says "Off track: N m to the track", then "Back on track". The debug box shows a few **DISCARDED** fixes (deliberate bad fixes).
 5. **Resume after a force-close.** In the Home Screen app: Settings › Testing › **Simulated GPS** on (the app reloads), load the sample track, press Start, and wait at least 30 s (Walked shows a distance). Swipe up to the app switcher and swipe Trails away. Reopen it from the Home Screen.
    *Expect:* a **Resume hike?** box with your walked distance, moving/stopped time and progress. Tap **Resume**: the numbers continue from there, the hike is running, and the map shows the track and dot (if the map stays blank, tell me: that would be the map's background worker failing).
    Repeat and tap **Start fresh**: everything resets, and the next reopen doesn't ask.
    At most the last 10 s of a recording can be lost; time while the app was closed is not counted.
    Afterwards, turn **Simulated GPS** off again (Settings › Testing) before any real walk.
-6. **Sound check.** Settings › Alerts › turn Sound off and on: it beeps right away. Try it with the side ring/silent switch on and off, and note whether you hear it.
+6. **Sound check.** Settings › Alerts › Off-track alert › **Banner + sound**: it beeps right away. (Set it back to Banner only afterwards if you prefer no sound.) Try it with the side ring/silent switch on and off, and note whether you hear it.
 7. **Real GPS.** Outdoors, from the Home Screen app: Settings › Testing › Test loop here, press Start, allow location.
    *Expect:* a blue dot with a pale accuracy circle and "GPS ±5–15 m". Walk the loop; Done increases.
-   Walk about 60 m away from the line: within a few seconds you get the banner and a beep. Come back: it clears.
+   Walk about 60 m away from the line: within a few seconds you get the banner (and a beep with Banner + sound). Come back: it clears.
    **Stop test:** stand still for a minute. *Expect:* after 30 s "Stopped 0:30", Walked stops growing, and no off-track alarm. Walk on: "Moving", and Walked grows again.
    **Debug view** (Settings › Testing): orange dots are raw GPS fixes, blue dots the smoothed position, red rings discarded fixes, and a purple dashed circle the stop area. The blue trail should be steadier than the orange, about 2 s behind you.
-   **Climb line** (debug box, needs a track with elevations: the test loop gets them from the DEM when created with signal, check the panel says `Elevation: 41 of 41 points · 41 from the DEM`): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop`. Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
+   **Climb line** (debug box, needs a track with elevations: the test loop gets them from the DEM when created with signal, check the panel says `Elevation: 41 of 41 points · 41 from the DEM`): it shows how much the track elevation at your snapped position changed over the last 30 s, e.g. `Climb (track) 4.2 m in 30 s (net +4.1 m, 490 m/h); limit 3 m → not a stop` (with no track it uses the DEM: `Climb (DEM)`). Note the values (a) while climbing slowly on a steep part and (b) while standing still on a slope. Standing still is not exactly 0: GPS jitter moves your snapped point up and down the slope (about 1 m in the simulation). Pick a setting between the two (see "Settings to tune" below) and tell me the numbers.
 8. **Wake Lock.** While hiking, the top bar shows **Screen awake**. Leave the phone untouched for 2 minutes.
    *Expect:* after 1 minute the screen goes black with large dim numbers (auto-dim), but the phone does **not** lock.
 9. **Background.** Press Start, switch to another app for 1 minute, come back.
@@ -98,11 +99,11 @@ The steps are in the order you should run them.
    *Expect:* the same name, distance, ↑ and ↓ as on the Mac, and the same profile shape. The file name looks like `Trackname_2026-10-28.gpx`.
    **Your hike:** after a walk (or the simulation in step 4), Track Library › **Export my hike** › Save to Files or AirDrop to the Mac. Open it in Maps 3D PRO or another app: the line follows where you walked, with a time on every point; stops show as a time gap at one spot, and each Stop/Start makes a new segment. Its length is within a few % of "Walked" (the file keeps a point every 5 m).
 11. **Free recording (no track).** Go › **Unload track**. Check the top bar.
-   *Expect:* "No track · Start records a free walk"; the big numbers are **Walked / Moving / Avg speed** (not Done / Remaining / From track), and the panel shows only the Walked/Moving/Stopped/Avg row: no table, no profile.
-   **Simulated** (quick, indoors): Settings › Testing › Simulated GPS on and Debug view on, press Start. *Expect:* "Free recording (no track)", Walked and Moving grow, after about 50 s "Stopped" (the simulation pauses 45 s), never an OFF TRACK banner; the debug box says `Climb – (no track)` and `Snapped –`. Force-close and reopen: **Resume hike?** with the walked distance; Resume continues from where it was.
+   *Expect:* "No track · Start records a free walk"; the big numbers are **Walked / Moving / Speed** (not Done / Remaining / From track), and the panel shows the walk's numbers (step 27) and its profile: no table.
+   **Simulated** (quick, indoors): Settings › Testing › Simulated GPS on and Debug view on, press Start. *Expect:* "Free recording (no track)", Walked and Moving grow, after about 50 s "Stopped" (the simulation pauses 45 s), never an OFF TRACK banner; the debug box says `Climb (DEM) …` and `Snapped –`. Force-close and reopen: **Resume hike?** with the walked distance; Resume continues from where it was.
    **Real** (outdoors, Simulated GPS off): press Start and walk a few hundred metres, stop for a minute, walk on, press Stop.
    *Expect:* a **pink line** on the map following where you walked (a short gap at the end is normal: it is redrawn every 5 s), and a **Save as track** link in the panel after Stop.
-   Then Track Library › **Export my hike** › Save to Files. *Expect:* a file `Free-recording_2026-10-28.gpx`; in the Files app's preview or a text editor it begins with `No elevation data (GPS altitude is not used)`. Open it with Open GPX (with signal): it loads as a track with your walk's shape, and gets elevations from the DEM (see step 14).
+   Then Track Library › **Export my hike** › Save to Files. *Expect:* a file `Free-recording_2026-10-28.gpx` with an `<ele>` on the points (DEM elevations since v0.12.0) and a description like `Walked 1.20 km, moving 0:15:20, ascent 42 m, descent 40 m`. Only a walk recorded entirely with no signal, in an area not stored on the device, says `No elevation data`.
 12. **Keep your walk?** Record a short free walk (step 11, simulated is fine) and do **not** export it. Then Settings › Testing › Load sample track.
    *Expect:* a **Keep your walk?** box: Export / Save as track / Discard / Cancel. **Cancel**: nothing changes. Try again and tap **Export**, then close the Share sheet without choosing anything: the box stays. Choose Save to Files: the sample loads.
    Record another walk, load the sample, tap **Save as track**. *Expect:* "Saved “Walk 2026-10-28 15:40” in the Track Library", then the sample loads. Settings › **Saved walks** › Load: your walk is the track; the panel says `Elevation: N of N points · N from the DEM (Terrain Tiles)` and the profile shows its ups and downs. Delete removes it.
@@ -152,6 +153,23 @@ The steps are in the order you should run them.
    **CSV:** make a file with the header `mile,place,note,restroom`, one row per milestone (no place = a waypoint; restroom `yes`). "Open CSV or text file". *Expect:* the same list, searching each place as written.
 26. **Follow a trail guide.** Track Library › Load it (the row says how many waypoints), then Go. *Expect:* markers along the line, with a restroom icon at restroom milestones; tap one for its note. A dark box says e.g. "In 0.8 mi" and the next note (tap it for a long note). Start (Simulated GPS is fine): the distance counts down and the note moves on as you pass each one. **Dim** shows it too. **Reverse direction**: the notes come from the other end. Force-close and reopen: all still there.
    **Between devices:** Export GPX on the computer, AirDrop to the iPhone, Track Library › Import GPX. *Expect:* the same total, waypoints, notes and restrooms.
+
+27. **Free walk numbers (v0.12.0).** Go with no track (Unload track if needed), Start. Simulated GPS is fine for a first look, but the speeds are then 10× too fast; a real walk of 15 minutes or more with some climbing is the real test.
+   *Expect:* the top bar shows **Walked / Moving / Speed**. Under the profile, **My walk**: Walked, Moving, Stopped, Avg speed, Speed (now), Elevation, Ascent, Descent, Vertical (now, ↑ or ↓, or "level"), Avg up, Avg down. Elevation shows "…" for a second, then a value; Speed and Vertical show "–" for the first 20 s or so; Avg speed after 1 minute; Avg up / Avg down after a minute spent climbing / descending. While Stopped: Speed 0 and Vertical "level", and Ascent doesn't move.
+   The profile above shows **your walk so far** (redrawn every 5 s), with a dot at the end. Compare Ascent with Maps 3D PRO for the same walk: both use a 5 m threshold here (Settings › Elevation).
+   **Vertical speed units:** Settings › Units › Vertical speed › per minute, then per second. *Expect:* "7.0 m/min", "0.12 m/s" (or ft/min, ft/s).
+   **After a force-close:** Ascent, Descent and the averages come back with the Resume prompt.
+   **Save and export:** Stop, then Track Library › Export my hike and Save as track. *Expect:* the exported file has elevations and its description gives ascent and descent; the saved walk's profile matches the one you saw on Go.
+28. **No signal (v0.12.0).** Elevations come from DEM tiles (about 1.7 km each), stored on the device once downloaded.
+   **Same area again:** after step 27 (or after loading a track there with signal), turn on Airplane Mode (keep Location Services on), reopen Trails, Go › Start in the same area. *Expect:* Elevation and Ascent work as before.
+   **New area:** Settings › Elevation › **Clear stored elevation tiles** (it shows how many are stored), Airplane Mode on, Start. *Expect:* Elevation says "unavailable" and a line explains why; turn Airplane Mode off: within about 20 s the elevation is back and Ascent carries on.
+29. **Following a track (v0.12.0).** Load the sample (Settings › Testing) with Simulated GPS on, Go › Start.
+   *Expect:* the top bar shows Done / Remaining / From track, the table Done / Remaining / Total, and the walk's own numbers (step 27) below as well. The status line has an **Alerts: banner only** button.
+   At the detour (about 3:30 at 10× speed): **Remaining** in the top bar and the table's Remaining column show **"—"**, the third number is labelled **Off track**, a red line says "Off track: 120 m to the track", and the red OFF TRACK banner shows, **without sound**. Back on the track: Remaining comes back.
+   **Quick toggle:** tap **Alerts:** during the hike. *Expect:* banner only → banner + sound (it beeps once) → off (no banner, but the "Off track" line and "—" still show) → banner only. A toast says it is for this hike only; Settings › Alerts keeps its choice. Force-close and reopen: Resume keeps the hike's choice; loading another track goes back to the Settings one.
+   **Settings › Alerts › Off-track alert:** Off / Banner only / Banner + sound. It starts at **Banner only** even if sound was on before v0.12.0.
+   On a planned track's straight (dashed) segments the wider limit applies (100 m by default) to the numbers as well as the banner.
+   **Profile:** Track / **My walk** above the profile switches between the planned track (marker where you are) and your walk so far; Explore always shows the track.
 
 ### If Wake Lock fails
 

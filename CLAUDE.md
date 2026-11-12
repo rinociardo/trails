@@ -118,8 +118,9 @@ wanted eventually.
 ### Hike prototype (done in v0.2.0, awaiting iPhone testing)
 - Import a GPX file and show it on the map; keep it saved on the device.
 - Show live position; distance done and remaining along the track.
-- Off-track alert when more than a user-set distance from the track: on-screen banner plus
-  sound (vibration where the platform allows it).
+- Off-track alert when more than a user-set distance from the track: on-screen banner,
+  sound only if chosen (vibration where the platform allows it, with sound). Since v0.12.0
+  a setting (see "Following a track").
 - Keep the screen awake with the Wake Lock API, showing whether it is active.
 - Battery-friendly behaviour wherever possible (GPS only while hiking, black "dim" screen
   for the OLED display, auto-dim, minimal map redraws).
@@ -202,8 +203,9 @@ wanted eventually.
   `<trkseg>` per Start..Stop. A point is kept every 5 m (≈2000 points for 10 km). Stops
   mirror the walked-distance logic: the jitter is replaced by the stop centre, written at
   the stop's start and end times (the time gap is the stop). Elevation per point = the
-  planned track's elevation at the snapped position, only while within the off-track
-  limit (never GPS altitude); otherwise no `<ele>`. The path is saved with the recording
+  DEM elevation at the smoothed position (since v0.12.0; never GPS altitude); no `<ele>`
+  for points recorded while the DEM couldn't be reached. Until v0.11.0 it was the planned
+  track's elevation while near it. The path is saved with the recording
   (survives a force-close) and cleared by "Reset walked/time" or loading a new track.
 - Delivery: **Web Share API with the file** where `navigator.canShare({files})` allows it
   (iPhone and Mac Safari: Share sheet with Save to Files, AirDrop, Messages); otherwise a
@@ -220,14 +222,14 @@ wanted eventually.
 - **Start works with no track loaded**: records the walk with smoothing, stop detection,
   walked distance, moving/stopped time, average speed and the debug view.
 - Nothing to compare against, so progress/remaining/off-track parts are **hidden, not shown
-  as zeros**: the top bar shows Walked / Moving / Avg speed instead of Done / Remaining /
-  From track (also on the dim screen); the trip panel hides the done/remaining table and the
-  profile. No off-track alerts. The debug box says "Climb – (no track)".
+  as zeros**: the top bar shows Walked / Moving / Speed (Avg speed until v0.11.0) instead of
+  Done / Remaining / From track (also on the dim screen, plus Ascent); the trip panel hides the
+  done/remaining table and shows the walk's own profile (v0.12.0). No off-track alerts. The
+  debug box's climb line uses the DEM ("Climb (DEM)").
 - Survives a force-close like a normal hike (same recording save and "Resume hike?").
-- **Export my hike** works: file `Free-recording_<date>.gpx`. No elevations (GPS altitude
-  stays unused); the file says so in `<desc>` ("No elevation data…") in `<metadata>` and
-  `<trk>`. The same note is written for any recorded hike with no elevation at all. Later:
-  fill from a DEM.
+- **Export my hike** works: file `Free-recording_<date>.gpx`. Since v0.12.0 with DEM
+  elevations and the ascent/descent in `<desc>`. A hike with no elevation at all (recorded
+  with no signal anywhere) still says so in `<desc>` ("No elevation data…").
 - Loading a track resets the recording, but the walk is **protected** first (see "Keeping
   recordings").
 - Simulated GPS with no track walks a 2 km square (10 points per side) from the last
@@ -253,7 +255,7 @@ wanted eventually.
 - **Save as track** (panel button after a recording, and Settings › Export): stores the
   walked path (segments joined, doubled stop points removed) in **Settings › Saved walks**
   (IndexedDB key `library`), named `Walk YYYY-MM-DD HH:MM` (with a track: `Track (walked …)`).
-  Elevations: the planned track's where the walk followed it, the DEM for the rest. Saved
+  Elevations: those recorded from the DEM (v0.12.0), the DEM fills any missing ones. Saved
   walks can be loaded (and followed) or deleted. Saving does not load it, so "Export my
   hike" still works on the recording afterwards.
 
@@ -267,8 +269,8 @@ wanted eventually.
   or with Settings › Track › **Fill elevations**.
 - **Track info** line in the panel: `Elevation: 812 of 812 points · 812 from the DEM (Terrain
   Tiles)` (or "all N points from the file", or how many are still missing and why).
-- GPS altitude is still never used. Exported hikes stay as recorded (no DEM elevations in
-  "Export my hike"); "Export track" of a DEM-filled track includes them.
+- GPS altitude is still never used. "Export my hike" has the DEM elevations recorded during
+  the walk (v0.12.0); "Export track" of a DEM-filled track includes them.
 
 ### Reopening the app (done in v0.6.0, requested 2026-10-28)
 - Settings › Remove track already existed (since v0.2.0).
@@ -464,6 +466,52 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   working). That is well under the published 1,000 a day, so the cause is unknown: check the key's
   dashboard.
 
+### Following a track and free walk numbers (built in v0.12.0, requested 2026-11-12; awaiting iPhone testing)
+- **Off-track alerts**: Settings › Alerts › Off-track alert **Off / Banner only / Banner + sound**,
+  default **Banner only** (no sound unless chosen). Installs that had "Sound with off-track alert"
+  (on by default) start at Banner only. Vibration (Android only) goes with sound.
+- **Quick toggle on Go** (status line, only with a track): "Alerts: …" cycles off → banner only →
+  banner + sound for the **current hike only** (saved with the recording, so Resume keeps it;
+  cleared when the recording is reset or another track loaded). Settings keeps its own value.
+- **Off track is always worked out**, whatever the alert: same limits and hysteresis as the banner
+  (2 far fixes in a row; back inside 80% of the limit; the wider limit on straight segments),
+  `OffTrackDetector` in `walk.js`. While off: Remaining (top bar, table distance/ascent/descent,
+  dim screen) shows **"—"**, the third top number is labelled "Off track", and the panel says
+  **"Off track: N m/ft to the track"**. Remaining comes back when back on track. Done keeps
+  following the snapped position. The "Back on track" toast only when alerts aren't Off.
+- **Free walk is the primary mode** and its numbers show with or without a track (panel "My walk"
+  grid): distance walked, moving time, stopped time, current speed (last 15 s), average moving
+  speed, elevation, ascent, descent, vertical speed now, average up, average down. Free mode top
+  bar: Walked / Moving / Speed (current).
+- **Elevation from the DEM at the smoothed position** (never GPS altitude), read on every fix from
+  the tile in memory (`elevationAt` in `dem-tiles.js`: "…" while its tile loads). Ascent/descent use
+  the existing hysteresis (5 m, Settings › Elevation), `ClimbCounter`, the same algorithm as a
+  track's profile (unit-tested to match). Nothing is added while stopped; after Stop/Start or
+  reopening, the next elevation starts afresh (the gap isn't a climb). The stop check's climb test
+  now also works with no track (DEM elevation; the track's when it has elevations).
+- **Vertical speed**: now = least-squares slope of the DEM elevation over the last minute (needs
+  20 s), "level" under 60 m/h. Average up = ascent ÷ time spent climbing (moving with the trend
+  above 60 m/h), average down likewise; shown after a minute of either. Units: **per hour**
+  (default), per minute or per second, in m or ft (Settings › Units › Vertical speed).
+- **Profile of the walk so far** (walked path against its DEM elevations, redrawn with the pink
+  line every 5 s, not while dimmed). With no track it is the profile (Go only); with a track, a
+  Track / My walk switch on Go (remembered); Explore always shows the track.
+- **Stored DEM tiles**: every downloaded tile is kept in Cache Storage `trails-dem-tiles` (kept
+  across app versions by `sw.js`), at most 600 (≈60 MB, oldest dropped first); the 8 tiles around
+  the current one are stored too while walking. So a repeat walk, or a walk where a track was
+  loaded with signal, works offline. Otherwise "unavailable" and a note on Go; failed tiles are
+  retried after 20 s or when the phone goes online. Settings › Elevation shows how many are stored
+  and can clear them. Terrain Tiles allow caching (see DEM above); OSM map tiles are still never
+  stored.
+- **Save as track and Export my hike** use these elevations (DEM only, not mixed with the track's:
+  mixing put steps in the walk's profile). Exported `<desc>` gives ascent and descent.
+- Recording save includes ascent, descent and the up/down times (`walk`), and the hike's alert
+  choice (`alertOverride`).
+- Tested 2026-11-12: unit tests (`tests/walk.test.js`); headless browser with synthetic DEM tiles
+  (a 10% slope) and recorded relay answers: free walk numbers, export with elevations, offline in a
+  stored area (works) and an unstored one ("unavailable"), off-track display with all three alert
+  modes, Track / My walk switch, recording save.
+
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
   (overpass-api.de) for `highway=path` and `route=hiking` in the view and drew them. To
@@ -507,7 +555,7 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   trail-guide importer).
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
   side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `guide-import.js` the trail-guide importer; `router.js`
   the routing service and `geocoder.js` the place search (both through the relay in `relay/`,

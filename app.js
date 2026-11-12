@@ -5,7 +5,8 @@ import { PositionSmoother, MotionTracker, PathRecorder, DEFAULT_TRACKING, trimTo
 import { createMapView } from './map-view.js';
 import { createProfileChart } from './profile-chart.js';
 import { TERRAIN, DEMO_TERRAIN } from './map-config.js';
-import { fillElevationsFromDem, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
+import { fillElevationsFromDem, elevationAt, demStoreCount, clearDemStore, DEM_NAME, DEM_CREDITS } from './dem-tiles.js';
+import { ClimbCounter, WalkRates, OffTrackDetector, averageRates, walkSnapshot, restoreWalk, nextAlertMode, LEVEL_MPS, SPEED_WINDOW_MS } from './walk.js';
 import { createPlanner } from './planner.js';
 import { createGuideImport } from './guide-import.js';
 import { locateWaypoints, nextWaypoint } from './guide.js';
@@ -20,8 +21,6 @@ const params = new URLSearchParams(location.search);
 const terrain = params.get('terrain') === 'demo' ? DEMO_TERRAIN : TERRAIN;
 
 const DEFAULT_CENTER = { lat: 40.5, lon: 18.0 };
-const OFF_TRACK_CONFIRM_FIXES = 2;  // consecutive far fixes before alerting (filters GPS jumps)
-const BACK_ON_TRACK_RATIO = 0.8;    // must come back inside 80% of the limit to clear the alert
 const ALERT_REPEAT_MS = 60_000;
 const STALE_FIX_MS = 30_000;
 const DEBUG_HISTORY = 60;           // fixes kept for the debug view
@@ -30,7 +29,9 @@ const SETTINGS_KEY = 'trails.settings';
 const DEFAULT_SETTINGS = {
     offTrackM: 50,
     offTrackStraightM: 100, // on straight (cross-country) segments of a planned track
-    sound: true,
+    alertMode: 'banner',    // off-track alert: 'off', 'banner' (banner only) or 'sound' (banner + sound)
+    vSpeedPer: 'h',         // vertical speed per hour, 'min' or 's'
+    profileShows: 'track',  // Go with a track: the profile of the 'track' or of 'walk' (my walk)
     autoDimS: 60,
     maxAccuracyM: DEFAULT_TRACKING.maxAccuracyM,
     smoothWindow: DEFAULT_TRACKING.windowSize,
@@ -58,6 +59,9 @@ function loadSettings() {
             if (stored.steepSlopeDeg === 30) delete stored.steepSlopeDeg;
             stored.steepDefault20 = true;
         }
+        // v0.12.0 replaced "Sound with off-track alert" (on by default) with a choice
+        // whose default is Banner only: no sound unless chosen again.
+        if (!('alertMode' in stored)) delete stored.sound;
         // v0.9.0 routes through the Trails relay: forget any personal key entered in v0.8.0.
         delete stored.orsKey;
         return { ...DEFAULT_SETTINGS, ...stored };
@@ -214,10 +218,9 @@ const planner = createPlanner({
     formatDateTime,
     describe: totalsText,
     onOpen: updateChrome,
-    // Back to the loaded track's profile and numbers, and the Plan start card.
+    // Back to the loaded track's profile (or the walk's) and numbers, and the Plan start card.
     onExit() {
-        chart.setData(track, track?.profile ?? null);
-        renderTrip();
+        showProfile();
         updateChrome();
     },
 });
@@ -251,6 +254,11 @@ let track = null;
 const smoother = new PositionSmoother({ maxAccuracyM: settings.maxAccuracyM, windowSize: settings.smoothWindow });
 const motion = new MotionTracker({ stopRadiusM: settings.stopRadiusM, stopTimeS: settings.stopTimeS, stopClimbM: settings.stopClimbM });
 const path = new PathRecorder(); // the hike as walked, for GPX export
+const climb = new ClimbCounter(settings.eleThresholdM); // ascent/descent of the walk, from the DEM
+const rates = new WalkRates();   // current speed, vertical speed, time climbing/descending
+// Off the track, for the numbers and the alert alike: 2 far fixes in a row
+// (filters GPS jumps), back inside 80% of the limit to clear.
+const offTrack = new OffTrackDetector({ confirmFixes: 2, backRatio: 0.8 });
 
 const hike = {
     running: false,
@@ -261,8 +269,9 @@ const hike = {
     lastFixAt: 0,
     prevAlong: 0,
     progress: null,     // { along, offset } from the snapped, smoothed position
-    farCount: 0,
     offTrack: false,
+    alertOverride: null, // Go › Alerts: this hike's alert mode, when not the one in Settings
+    ele: {},            // DEM elevation here: { ele } or { status: 'loading' | 'unavailable' }
     lastAlertAt: 0,
     dimmed: false,
     savedPoints: 0,     // path.pointCount when the walk was last exported or saved as a track
@@ -279,27 +288,36 @@ const debug = {
 
 // ---------- Rendering ----------
 
+// Off the track (same limits and hysteresis as the alert): remaining shows "—"
+// and "Off track: N m to the track" instead, whatever the alert setting.
+const isOffTrack = () => Boolean(track) && hike.offTrack;
+
 function renderStats() {
     const p = hike.progress;
+    const off = isOffTrack();
     const done = track && p ? p.along : null;
     const remaining = track ? track.total - (p ? p.along : 0) : null;
     const offset = track && p ? p.offset : null;
 
     const doneText = done == null ? '–' : formatDistance(done);
-    const remainingText = remaining == null ? '–' : formatDistance(remaining);
+    const remainingText = off ? '—' : remaining == null ? '–' : formatDistance(remaining);
     const offsetText = formatDistance(offset);
 
     setText($('stat-done'), doneText);
     setText($('stat-remaining'), remainingText);
     setText($('stat-offset'), offsetText);
+    setText($('stat-offset-label'), off ? 'Off track' : 'From track');
     setText($('dim-done'), doneText);
     setText($('dim-remaining'), remainingText);
     setText($('dim-offset'), offsetText);
+    setText($('dim-offset-label'), off ? 'Off track' : 'From track');
 
-    $('stat-offset').classList.toggle('alert', hike.offTrack);
-    $('dim-overlay').classList.toggle('off-track', hike.offTrack);
-    $('alert-banner').hidden = !hike.offTrack;
-    if (hike.offTrack) setText($('alert-distance'), `${offsetText} from route`);
+    $('stat-offset').classList.toggle('alert', off);
+    $('dim-overlay').classList.toggle('off-track', off);
+    $('off-track-line').hidden = !off;
+    if (off) setText($('off-track-line'), `Off track: ${offsetText} to the track`);
+    $('alert-banner').hidden = !off || alertMode() === 'off';
+    if (off) setText($('alert-distance'), `${offsetText} from route`);
 
     renderNextWaypoint();
     renderTrip();
@@ -352,19 +370,21 @@ function renderTrip() {
     const along = hike.progress?.along ?? 0;
     const started = Boolean(track && hike.progress);
     const done = (v) => (started ? v : '–');
+    const off = isOffTrack();
+    const rem = (v) => (off ? '—' : v);
 
     setText($('t-dist-done'), done(formatDistance(along)));
-    setText($('t-dist-rem'), track ? formatDistance(track.total - along) : '–');
+    setText($('t-dist-rem'), track ? rem(formatDistance(track.total - along)) : '–');
     setText($('t-dist-total'), track ? formatDistance(track.total) : '–');
 
     const at = prof ? profileAt(track, prof, along) : null;
     setText($('t-asc-done'), prof ? done(formatMetres(at.ascentDone)) : '–');
-    setText($('t-asc-rem'), prof ? formatMetres(prof.totalAscent - at.ascentDone) : '–');
+    setText($('t-asc-rem'), prof ? rem(formatMetres(prof.totalAscent - at.ascentDone)) : '–');
     setText($('t-asc-total'), prof ? formatMetres(prof.totalAscent) : '–');
     setText($('t-desc-done'), prof ? done(formatMetres(at.descentDone)) : '–');
-    setText($('t-desc-rem'), prof ? formatMetres(prof.totalDescent - at.descentDone) : '–');
+    setText($('t-desc-rem'), prof ? rem(formatMetres(prof.totalDescent - at.descentDone)) : '–');
     setText($('t-desc-total'), prof ? formatMetres(prof.totalDescent) : '–');
-    setText($('dim-climb'), prof ? formatMetres(prof.totalAscent - at.ascentDone) : '–');
+    setText($('dim-climb'), prof ? rem(formatMetres(prof.totalAscent - at.ascentDone)) : '–');
 
     let summary = 'No track · Start records your walk';
     if (track) {
@@ -374,7 +394,47 @@ function renderTrip() {
     }
     setText($('trip-summary'), summary);
     setText($('track-info'), track ? elevationText(track) : '');
-    if (!hike.dimmed) chart.setPosition(started ? along : null);
+    if (!hike.dimmed && !profileShowsWalk()) chart.setPosition(started ? along : null);
+}
+
+// ---------- Elevation profile: the track's, or the walk's own ----------
+
+// With no track it is always the walk's; with one, Go › Track / My walk chooses.
+function profileShowsWalk() {
+    return !track || (currentTab === 'go' && settings.profileShows === 'walk');
+}
+
+function showProfile() {
+    if (planner.active) return; // the planner draws its own
+    const walk = profileShowsWalk();
+    for (const b of $('profile-switch').querySelectorAll('button')) {
+        b.setAttribute('aria-pressed', String(b.dataset.show === (walk ? 'walk' : 'track')));
+    }
+    if (walk) renderWalkProfile();
+    else chart.setData(track, track.profile);
+    renderTrip();
+}
+
+// The walk so far: elevation (DEM) against distance along the recorded path, with
+// a dot where you are. Rebuilt with the walked line (at most every 5 s, not while dimmed).
+function renderWalkProfile() {
+    const points = walkedPoints();
+    if (points.length < 2) {
+        chart.setData(null, null, { empty: 'Your walk’s elevation profile appears here after Start.' });
+        return;
+    }
+    const walkTrack = buildTrack(points);
+    chart.setData(walkTrack, buildProfile(walkTrack, settings.eleThresholdM),
+        { empty: 'Elevation unavailable (no signal): it fills in once the DEM can be reached.' });
+    chart.setPosition(hike.running ? walkTrack.total : null);
+}
+
+for (const b of $('profile-switch').querySelectorAll('button')) {
+    b.addEventListener('click', () => {
+        settings.profileShows = b.dataset.show;
+        saveSettings();
+        showProfile();
+    });
 }
 
 // eleInfo: { own (from the file), dem (from the DEM), missing, status:
@@ -400,6 +460,7 @@ function renderWalkedPath(force = false) {
     if (!force && now - walkedDrawnAt < WALKED_REDRAW_MS) return;
     walkedDrawnAt = now;
     view.setWalked(path.snapshot());
+    if (profileShowsWalk() && !planner.active && settings.panelOpen) renderWalkProfile();
 }
 
 // Distance actually walked and moving/stopped time (from the motion tracker).
@@ -410,25 +471,51 @@ function renderWalk(now = Date.now()) {
     const moving = recorded ? formatDuration(motion.movingMs) : '–';
     // Average speed over moving time only; meaningless in the first minute.
     const speed = motion.movingMs >= 60_000 ? units.speed(motion.walked / (motion.movingMs / 1000)) : '–';
+    const stopped = motion.state === 'STOPPED';
+    // Current speed over the last 15 s; nothing once the fixes stop coming.
+    const fresh = hike.running && hike.lastFixAt && now - hike.lastFixAt < SPEED_WINDOW_MS;
+    const speedNow = !fresh ? '–' : stopped ? units.speed(0) : units.speed(rates.speed(now));
+    // DEM elevation here (never GPS altitude).
+    const e = hike.ele;
+    const eleText = !hike.running ? '–' : Number.isFinite(e.ele) ? formatMetres(e.ele)
+        : e.status === 'unavailable' ? 'unavailable' : e.status === 'loading' ? '…' : '–';
+    const ascent = recorded ? formatMetres(climb.ascent) : '–';
+    const per = settings.vSpeedPer;
+    const v = fresh && !stopped ? rates.vertical(now) : null;
+    let vertical = '–';
+    if (fresh && stopped) vertical = 'level';
+    else if (v != null) vertical = Math.abs(v) <= LEVEL_MPS ? 'level' : `${v > 0 ? '↑' : '↓'} ${units.verticalSpeed(v, per)}`;
+    const avg = averageRates(climb, rates);
+
     setText($('w-walked'), walked);
     setText($('w-moving'), moving);
     setText($('w-stopped'), recorded ? formatDuration(motion.stoppedMs) : '–');
     setText($('w-speed'), speed);
+    setText($('w-speed-now'), speedNow);
+    setText($('w-ele'), eleText);
+    setText($('w-ascent'), ascent);
+    setText($('w-descent'), recorded ? formatMetres(climb.descent) : '–');
+    setText($('w-vert'), vertical);
+    setText($('w-vert-up'), avg.up == null ? '–' : `↑ ${units.verticalSpeed(avg.up, per)}`);
+    setText($('w-vert-down'), avg.down == null ? '–' : `↓ ${units.verticalSpeed(avg.down, per)}`);
+    const note = $('walk-note');
+    note.hidden = !(hike.running && e.status === 'unavailable');
+    if (!note.hidden) setText(note, 'Elevation unavailable: no signal, and this area’s elevation tile isn’t stored on the device yet. Ascent and descent carry on once it can be reached.');
     // Free recording (no track): these replace Done/Remaining/From track.
     if (!track) {
         setText($('stat-walked'), walked);
         setText($('stat-moving'), moving);
-        setText($('stat-speed'), speed);
+        setText($('stat-speed'), speedNow);
         setText($('dim-walked'), walked);
         setText($('dim-moving'), moving);
-        setText($('dim-speed'), speed);
+        setText($('dim-speed'), speedNow);
+        setText($('dim-ascent'), ascent);
     }
 
     $('save-walk-btn').hidden = hike.running || !walkUnsaved();
 
     const status = $('motion-status');
     status.hidden = !hike.running;
-    const stopped = motion.state === 'STOPPED';
     const text = stopped ? `Stopped ${formatDuration(now - motion.stoppedSince)}` : 'Moving';
     setStatus(status, text, stopped ? 'warn' : '');
     setText($('dim-motion'), hike.running ? text : '');
@@ -455,15 +542,14 @@ function pushLimited(list, item) {
 // a slow climb can be compared with standing still on a slope to pick the
 // "...unless the track climbed more than" setting (a stop needs the change at or below it).
 function climbLine(now) {
-    if (!track) return 'Climb    – (no track)';
-    if (!track.profile) return 'Climb    – (track has no elevations)';
+    const source = track?.profile ? 'track' : 'DEM';
     const w = trimToWindow(debug.eles, now, settings.stopTimeS * 1000);
     if (w.length < 2) return `Climb    – (waiting for fixes)`;
     const range = elevationRange(w);
     const spanS = (w[w.length - 1].time - w[0].time) / 1000;
     const net = w[w.length - 1].ele - w[0].ele;
     const rate = spanS > 0 ? Math.round(Math.abs(net) / spanS * 3600) : 0;
-    return `Climb    ${formatMetres(range, 1)} in ${Math.round(spanS)} s (net ${net >= 0 ? '+' : '−'}${formatMetres(Math.abs(net), 1)}, ` +
+    return `Climb (${source}) ${formatMetres(range, 1)} in ${Math.round(spanS)} s (net ${net >= 0 ? '+' : '−'}${formatMetres(Math.abs(net), 1)}, ` +
         `${formatMetres(rate)}/h); limit ${formatMetres(settings.stopClimbM, 1)}` +
         (range > settings.stopClimbM ? ' → not a stop' : '');
 }
@@ -491,7 +577,8 @@ function renderDebug() {
               `need ${settings.stopTimeS} s`,
         climbLine(now),
         hike.progress ? `Snapped  ${formatDistance(hike.progress.along)}, ${formatMetres(hike.progress.offset)} off` : 'Snapped  –',
-        `Walked   ${formatDistance(motion.walked)}`,
+        `Walked   ${formatDistance(motion.walked)}, ↑ ${formatMetres(climb.ascent)} ↓ ${formatMetres(climb.descent)}`,
+        `DEM here ${Number.isFinite(hike.ele.ele) ? formatMetres(hike.ele.ele, 1) : hike.ele.status || '–'}`,
     ];
     setText(box, lines.join('\n'));
 
@@ -521,6 +608,10 @@ function resetTrip() {
     debug.smooth = [];
     debug.discarded = 0;
     hike.savedPoints = 0;
+    climb.reset();
+    rates.reset();
+    hike.alertOverride = null; // the Go › Alerts choice lasts one hike
+    renderAlertToggle();
     renderWalk();
     renderDebug();
     renderWalkedPath(true);
@@ -552,6 +643,8 @@ function saveRecording() {
         prevAlong: hike.prevAlong,
         progress: hike.progress,
         savedPoints: hike.savedPoints,
+        walk: walkSnapshot(climb, rates),
+        alertOverride: hike.alertOverride,
         savedAt: Date.now(),
     };
     kvSet('recording', record).catch((err) => console.error('Saving recording failed:', err));
@@ -579,7 +672,10 @@ function restoreRecording(saved) {
     const apply = () => {
         motion.restore(saved.motion);
         path.restore(saved.path);
+        restoreWalk(climb, rates, saved.walk);
         hike.savedPoints = saved.savedPoints ?? 0;
+        hike.alertOverride = saved.alertOverride ?? null;
+        renderAlertToggle();
         if (saved.trackKey && saved.trackKey === trackKey() && saved.progress) {
             hike.prevAlong = saved.prevAlong;
             hike.progress = saved.progress;
@@ -588,6 +684,7 @@ function restoreRecording(saved) {
         renderWalk();
         renderDebug();
         renderWalkedPath(true);
+        showProfile();
     };
     // Stopped on purpose last time: just bring the numbers back.
     if (!saved.running) {
@@ -632,13 +729,13 @@ async function setTrack(name, points, { save = true, eleInfo = null, temporary =
     renderWaypoints();
     track.eleInfo = eleInfo ? { ...eleInfo } : { own, dem: 0, missing: points.length - own, status: 'ok' };
     track.profile = buildProfile(track, settings.eleThresholdM);
-    chart.setData(track, track.profile);
     hike.prevAlong = 0;
     hike.progress = null;
     resetOffTrack();
     view.setTrack(points);
     view.fitTrack(points);
     renderTrackStatus();
+    showProfile();
     renderStats();
     if (save) await saveTrack();
     if (track.eleInfo.missing) fillTrackElevations();
@@ -674,7 +771,7 @@ async function fillTrackElevations() {
         t.eleInfo.dem += result.filled;
         t.eleInfo.missing = result.missing;
         t.profile = buildProfile(t, settings.eleThresholdM);
-        chart.setData(t, t.profile);
+        showProfile();
     }
     t.eleInfo.status = !t.eleInfo.missing ? 'ok' : result?.tooLarge ? 'tooLarge' : 'failed';
     renderTrip();
@@ -689,10 +786,10 @@ async function clearTrack() {
     track = null;
     hike.progress = null;
     resetOffTrack();
-    chart.setData(null, null);
     view.clearTrack();
     renderWaypoints();
     renderTrackStatus();
+    showProfile();
     renderStats();
     try {
         await kvDelete('track');
@@ -787,36 +884,55 @@ $('gpx-input').addEventListener('change', async (event) => {
 // ---------- Off-track detection and alerts ----------
 
 function resetOffTrack() {
-    hike.farCount = 0;
+    offTrack.reset();
     hike.offTrack = false;
 }
 
-function updateOffTrack(offset, limit) {
-    if (offset > limit) {
-        hike.farCount++;
-    } else {
-        hike.farCount = 0;
-        if (hike.offTrack && offset < limit * BACK_ON_TRACK_RATIO) {
-            hike.offTrack = false;
-            toast('Back on track.');
-        }
-    }
-    if (hike.farCount >= OFF_TRACK_CONFIRM_FIXES) {
-        if (!hike.offTrack) {
-            hike.offTrack = true;
-            alertUser();
-        } else if (Date.now() - hike.lastAlertAt > ALERT_REPEAT_MS) {
-            alertUser();
-        }
-    }
+// This hike's alert mode: Go › Alerts if changed there, else Settings › Alerts.
+function alertMode() {
+    return hike.alertOverride ?? settings.alertMode;
 }
 
+const ALERT_LABELS = { off: 'off', banner: 'banner only', sound: 'banner + sound' };
+
+function renderAlertToggle() {
+    const mode = alertMode();
+    setText($('alert-toggle'), `Alerts: ${ALERT_LABELS[mode]}`);
+    $('alert-toggle').classList.toggle('warn', mode === 'off');
+}
+
+// Off/on track is always worked out (it drives the "Off track" numbers); the
+// alert setting only decides whether a banner shows and a sound plays.
+function updateOffTrack(offset, limit) {
+    const change = offTrack.update(offset, limit);
+    hike.offTrack = offTrack.offTrack;
+    if (change === 'back' && alertMode() !== 'off') toast('Back on track.');
+    if (change === 'off' || (hike.offTrack && Date.now() - hike.lastAlertAt > ALERT_REPEAT_MS)) alertUser();
+}
+
+// The banner shows from renderStats; Banner + sound also beeps (and vibrates on
+// Android: iPhone Safari has no web vibration), again every minute while off track.
 function alertUser() {
     hike.lastAlertAt = Date.now();
-    // Android only: iPhone Safari has no web vibration.
+    if (alertMode() !== 'sound') return;
     navigator.vibrate?.([400, 200, 400]);
-    if (settings.sound) beep();
+    beep();
 }
+
+// Go › Alerts: Off → Banner only → Banner + sound, for this hike only.
+$('alert-toggle').addEventListener('click', () => {
+    const mode = nextAlertMode(alertMode());
+    hike.alertOverride = mode === settings.alertMode ? null : mode;
+    if (mode === 'sound') {
+        unlockAudio();
+        beep(); // you hear what the alert sounds like, and how loud
+    }
+    renderAlertToggle();
+    renderStats();
+    saveRecording();
+    toast(`Off-track alerts for this hike: ${ALERT_LABELS[mode]}` +
+        (hike.alertOverride ? ` (Settings › Alerts stays ${ALERT_LABELS[settings.alertMode]}).` : ', as in Settings.'));
+});
 
 let audioCtx = null;
 
@@ -961,22 +1077,35 @@ function onFix(position) {
     // Snap first (while moving): stop detection uses the track elevation here
     // to tell a slow steep climb from a stop.
     const loc = track && motion.state !== 'STOPPED' ? locateOnTrack(track, smoothed, hike.prevAlong) : null;
-    const ele = loc && track.profile ? profileAt(track, track.profile, loc.along).ele : null;
+    const trackEle = loc && track.profile ? profileAt(track, track.profile, loc.along).ele : null;
+    // DEM elevation at the smoothed position: the walk's own elevation, ascent and descent.
+    const dem = elevationAt(smoothed.lat, smoothed.lon);
+    const demEle = Number.isFinite(dem.ele) ? dem.ele : null;
     const anchor = motion.anchor; // update() clears it when walking resumes
-    const change = motion.update(smoothed, raw.acc, now, ele);
+    // Slow-climb check: the track's elevation when there is one, else the DEM's.
+    const change = motion.update(smoothed, raw.acc, now, track?.profile ? trackEle : demEle);
     const stopped = motion.state === 'STOPPED';
+    if (change) rates.clear(); // the walked distance jumps at a stop: speeds start again
 
-    // Recorded path: elevations from the track only while near it.
+    // While stopped nothing is added: position jitter is no climb.
+    if (!stopped) {
+        climb.add(demEle);
+        rates.add({ time: now, walked: motion.walked, ele: demEle });
+    }
+
+    // Recorded path: the DEM elevation only (mixing in the track's would put steps in
+    // the walk's profile); none while the DEM can't be reached (Save as track fills them).
     if (change === 'stopped') path.stop(motion.anchor, motion.stoppedSince);
     if (change === 'resumed') path.resume(anchor, now);
-    if (!stopped) path.add({ ...smoothed, ele: loc && loc.offset <= settings.offTrackM ? ele : null, time: now });
+    if (!stopped) path.add({ ...smoothed, ele: demEle, time: now });
     if (change) saveRecording();
-    renderWalkedPath(Boolean(change));
 
-    if (settings.debug && track?.profile) {
-        // While stopped the track isn't snapped for progress; snap here for the debug figure only.
-        const at = loc ?? locateOnTrack(track, smoothed, hike.prevAlong);
-        debug.eles.push({ time: now, ele: loc ? ele : profileAt(track, track.profile, at.along).ele });
+    if (settings.debug) {
+        // The elevation the stop check uses. While stopped the track isn't snapped
+        // for progress; snap here for the debug figure only.
+        let e = demEle;
+        if (track?.profile) e = loc ? trackEle : profileAt(track, track.profile, locateOnTrack(track, smoothed, hike.prevAlong).along).ele;
+        if (Number.isFinite(e)) debug.eles.push({ time: now, ele: e });
         debug.eles = trimToWindow(debug.eles, now, settings.stopTimeS * 1000);
     }
 
@@ -991,6 +1120,8 @@ function onFix(position) {
     }
     const shown = stopped ? motion.anchor : smoothed;
     hike.lastFix = { lat: shown.lat, lon: shown.lon, acc: raw.acc };
+    hike.ele = stopped ? elevationAt(shown.lat, shown.lon) : dem;
+    renderWalkedPath(Boolean(change));
 
     // While dimmed the map is hidden: skip redrawing it to save battery.
     if (!hike.dimmed) view.showPosition(hike.lastFix, { offTrack: hike.offTrack });
@@ -1145,6 +1276,9 @@ function stopHike() {
     hike.lastFixAt = 0;
     motion.pause(Date.now());
     smoother.reset();
+    climb.pause();
+    rates.clear();
+    hike.ele = {};
     debug.eles = [];
     renderWalk();
     renderWalkedPath(true);
@@ -1194,7 +1328,9 @@ function fillSettings() {
     $('set-units').value = units.system;
     for (const id of Object.keys(LENGTH_FIELDS)) showLengthSetting(id);
     $('set-steep').value = settings.steepSlopeDeg;
-    $('set-sound').checked = settings.sound;
+    $('set-alerts').value = settings.alertMode;
+    $('set-vspeed').value = settings.vSpeedPer;
+    demStoreCount().then((n) => setText($('dem-store-count'), n == null ? 'not supported here' : `${n} tiles`));
     $('set-autodim').value = String(settings.autoDimS);
     $('set-window').value = settings.smoothWindow;
     $('set-stoptime').value = settings.stopTimeS;
@@ -1286,10 +1422,9 @@ $('set-units').addEventListener('change', (e) => {
 $('router-credit').textContent = ROUTER_ATTRIBUTION;
 $('geocoder-credit').textContent = GEOCODER_ATTRIBUTION;
 bindLengthSetting('set-elethreshold', () => {
-    if (!track) return;
-    track.profile = buildProfile(track, settings.eleThresholdM);
-    chart.setData(track, track.profile);
-    renderTrip();
+    climb.thresholdM = settings.eleThresholdM; // from the next climb or drop on
+    if (track) track.profile = buildProfile(track, settings.eleThresholdM);
+    showProfile();
 });
 
 $('set-debug').addEventListener('change', (e) => {
@@ -1318,13 +1453,28 @@ $('reset-trip-btn').addEventListener('click', async () => {
     }
 });
 
-$('set-sound').addEventListener('change', (e) => {
-    settings.sound = e.target.checked;
+$('set-alerts').addEventListener('change', (e) => {
+    settings.alertMode = e.target.value;
     saveSettings();
-    if (settings.sound) {
+    if (alertMode() === 'sound') {
         unlockAudio();
         beep(); // lets you check the volume right away
     }
+    renderAlertToggle();
+    renderStats();
+});
+
+$('set-vspeed').addEventListener('change', (e) => {
+    settings.vSpeedPer = e.target.value;
+    saveSettings();
+    renderWalk();
+});
+
+$('dem-clear-btn').addEventListener('click', async () => {
+    if (!confirm('Clear the elevation tiles stored on this device? They are downloaded again when needed (with signal).')) return;
+    await clearDemStore();
+    fillSettings();
+    toast('Stored elevation tiles cleared.');
 });
 
 $('set-autodim').addEventListener('change', (e) => {
@@ -1389,7 +1539,9 @@ async function exportHike() {
     const name = track ? `${base} (walked)` : base;
     // Free recordings (or a track without elevations): say so, to fill from a DEM later.
     const walked = `Walked ${formatDistance(motion.walked)}, moving ${formatDuration(motion.movingMs)}`;
-    const desc = path.hasElevations ? walked : `${walked}. ${NO_ELEVATION_DESC}`;
+    const desc = path.hasElevations
+        ? `${walked}, ascent ${formatMetres(climb.ascent)}, descent ${formatMetres(climb.descent)}`
+        : `${walked}. ${NO_ELEVATION_DESC}`;
     const pointCount = path.pointCount;
     const exported = await exportGpx(buildGpx({ name, desc, segments: path.snapshot(), time: start }),
         gpxFileName(track ? `${base} walked` : base, start), name);
@@ -1484,8 +1636,8 @@ $('edit-loaded-btn').addEventListener('click', () => {
     openPlanner({ name: track.name || 'Track', points: track.points, waypoints: track.waypoints });
 });
 
-// Saves the walk to the Track Library, with elevations: the planned
-// track's where the walk followed it, the DEM's for the rest.
+// Saves the walk to the Track Library with its elevations (DEM, recorded as you
+// walked); points recorded with no signal get them from the DEM now, if it can be reached.
 async function saveWalkAsTrack() {
     const points = walkedPoints();
     if (points.length < 2) {
@@ -1664,6 +1816,7 @@ function showTab(tab) {
         b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false');
     }
     $('layers-panel').hidden = true;
+    if (track && settings.profileShows === 'walk') showProfile(); // My walk shows on Go only
     if (tab === 'library') renderLibrary();
     if (tab === 'settings') fillSettings();
     if (tab !== 'plan') {
@@ -1812,6 +1965,8 @@ document.addEventListener('visibilitychange', () => {
 if (SIMULATE) toast('Simulated GPS is on: Go › Start replays the track. Turn it off in Settings › Testing.', 5000);
 showTab(settings.tab === 'plan' ? 'explore' : settings.tab);
 renderTrackStatus();
+renderAlertToggle();
+showProfile();
 renderStats();
 renderWalk();
 renderDebug();

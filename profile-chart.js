@@ -27,6 +27,8 @@ export function createProfileChart(root, { getUnits = () => makeUnits('metric') 
     const empty = root.querySelector('.profile-empty');
 
     let track = null, profile = null;
+    const defaultEmpty = empty.textContent;
+    let emptyText = null; // shown instead of the profile, even with nothing to draw
     let markerAlong = null;
     let scale = null; // { x(d), y(e), plotH }
 
@@ -39,7 +41,7 @@ export function createProfileChart(root, { getUnits = () => makeUnits('metric') 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
 
-        empty.hidden = !track || Boolean(profile);
+        empty.hidden = Boolean(profile) || !(track || emptyText);
         canvas.hidden = !profile;
         if (!track || !profile || w === 0) {
             scale = null;
@@ -169,10 +171,13 @@ export function createProfileChart(root, { getUnits = () => makeUnits('metric') 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
 
     return {
-        // profile may be null (track without elevations).
-        setData(newTrack, newProfile) {
+        // profile may be null (track without elevations); options.empty: the message
+        // shown then (default "No elevation data in this track").
+        setData(newTrack, newProfile, { empty: message = null } = {}) {
             track = newTrack;
             profile = newProfile;
+            emptyText = message;
+            empty.textContent = message ?? defaultEmpty;
             markerAlong = null;
             hideCursor();
             draw();
