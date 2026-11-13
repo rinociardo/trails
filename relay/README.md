@@ -17,7 +17,8 @@ be used inside an app; route the app's requests through your own server instead
   and `POST /geocode` with a place name (at most 200 characters, 8 results, optionally
   near a point). Nothing else of openrouteservice is reachable through it.
 - Only from the sites in `ALLOWED_ORIGINS` (`wrangler.toml`): the app on
-  rinociardo.github.io, and `localhost:8000` for testing on the computer.
+  trails.rinociardo.com (since v0.15.1), rinociardo.github.io (the old address, while people
+  move), and `localhost:8000` for testing on the computer.
 - At most 30 routes a minute per visitor (per IP address, counted per Cloudflare location).
 - Your key's limits apply to everyone together: 2,000 routes a day, 40 a minute; place
   searches have their own quota (shown in your dashboard at account.heigit.org). When a
@@ -89,7 +90,7 @@ quotes it, it is replaced by `[key]`.
 ## Updating the relay
 
 After a change to `worker.js` or `wrangler.toml` (e.g. v0.10.0 added place search, v0.13.0
-alternative routes for recording gaps):
+alternative routes for recording gaps, v0.15.1 the address trails.rinociardo.com):
 ```
 cd ~/Projects/Trails/relay
 npx wrangler@4.151.0 deploy
@@ -100,7 +101,9 @@ curl -s -i -X POST https://trails-relay.rinociardo.workers.dev/geocode \
   -H 'Origin: https://rinociardo.github.io' -H 'Content-Type: application/json' \
   -d '{"text":"Wengen"}' | head -c 400
 ```
-Expect `HTTP/2 200` and `{"geocoding":…,"type":"FeatureCollection",…`.
+Expect `HTTP/2 200` and `{"geocoding":…,"type":"FeatureCollection",…`. The same with
+`-H 'Origin: https://trails.rinociardo.com'` must also answer 200 (since v0.15.1); before the
+redeploy it answers 403 "origin not allowed".
 
 Check alternative routes (v0.13.0):
 ```

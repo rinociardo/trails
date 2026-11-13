@@ -132,9 +132,10 @@
         .walk-row .link-btn { margin-left: auto; }
         .track-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 12px; }
         .track-info { margin-top: 4px; font-size: 11px; color: var(--panel-muted); }
-        .library-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
-        .library-row button { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text); }
+        .library-row { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 6px; align-items: center; margin-bottom: 6px; font-size: 14px; }
+        .library-row button { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text); }
         .library-row button.danger { color: var(--danger); }
+        .warn-note { background: #fff4df; color: #5c3b00; border-radius: 8px; padding: 8px 10px; }
         .lib-line { margin: 0 0 8px; font-size: 14px; }
         .library-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .credits { margin: 4px 0 0; padding-left: 18px; font-size: 11px; color: var(--panel-muted); }
@@ -250,6 +251,15 @@
             font-size: 20px;
             text-align: center;
         }
+        #moved-banner {
+            top: calc(var(--stats-h, 0px) + 8px);
+            z-index: 1550; /* under the off-track banner */
+            display: flex; align-items: center; gap: 10px;
+            background: #8a5a00; color: #fff; font-weight: 600; font-size: 14px;
+        }
+        #moved-banner span { flex: 1; }
+        #moved-banner a { color: #fff; }
+        #moved-banner button { border: 0; background: none; color: #fff; font: inherit; font-size: 20px; padding: 4px 6px; }
         #update-banner {
             bottom: calc(var(--bottom-h, 120px) + var(--panel-h, 0px) + 36px);
             background: var(--panel);
@@ -809,6 +819,9 @@
 
     <!-- Track Library: saved tracks and walks, import, export, save as track. -->
     <section class="page" id="library-page" data-tabs="library">
+        <p class="hint warn-note" id="moved-note" hidden>Trails has moved to <a href="https://trails.rinociardo.com/" target="_blank" rel="noopener">trails.rinociardo.com</a>.
+            Your tracks and walks stay on this phone at this address: <b>Export</b> each one below (Save to Files), then at the new address
+            Track Library › <b>Import GPX</b> and pick them all at once.</p>
         <h3>Tracks</h3>
         <div id="library"></div>
         <p class="hint" id="library-empty">None yet. Import a GPX, draw a track in Plan, or make one from a walk.</p>
@@ -819,7 +832,7 @@
             <label class="button" for="gpx-input">Import GPX</label>
             <button type="button" id="lib-new-track-btn">New track</button>
         </div>
-        <p class="hint">Import adds the file here and loads it to follow in Go. "Edit" opens a saved track in Plan; editing a recorded walk or a GPX saves a new track and keeps the original.</p>
+        <p class="hint">Import adds the file here and loads it to follow in Go; pick several files at once to add them all without loading any. "Export" on a row writes it as GPX (a walk stays a walk when imported again). "Edit" opens a saved track in Plan; editing a recorded walk or a GPX saves a new track and keeps the original.</p>
 
         <h3>Loaded track</h3>
         <p class="lib-line" id="lib-loaded">None</p>
@@ -974,6 +987,10 @@
         <button type="button" id="pause-banner-action"></button>
         <button type="button" id="pause-banner-close" aria-label="Close">×</button>
     </div>
+    <div id="moved-banner" class="banner" role="status" hidden>
+        <span>Trails has moved to <a href="https://trails.rinociardo.com/" target="_blank" rel="noopener">trails.rinociardo.com</a>. Export your tracks (Track Library) and import them there.</span>
+        <button type="button" id="moved-close" aria-label="Close">×</button>
+    </div>
     <div id="update-banner" class="banner" hidden>
         <span>New version installed.</span>
         <button type="button" id="reload-btn">Reload</button>
@@ -1009,7 +1026,7 @@
         </nav>
     </div>
     <!-- No "accept" filter: iOS greys out .gpx files when one is set -->
-    <input type="file" id="gpx-input" hidden>
+    <input type="file" id="gpx-input" multiple hidden>
 
     <div id="dim-overlay" hidden>
         <div class="track-only"><div class="dim-value" id="dim-done">–</div><div class="dim-label">Done</div></div>

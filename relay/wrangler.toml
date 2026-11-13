@@ -6,9 +6,11 @@ compatibility_date = "2026-10-01"
 workers_dev = true
 
 [vars]
-# Sites allowed to use the relay (comma-separated). localhost:8000 is for testing
+# Sites allowed to use the relay (comma-separated). trails.rinociardo.com is the app's
+# address since v0.15.1; rinociardo.github.io (the old one) stays while people move.
+# localhost:8000 is for testing
 # the app on the computer; remove it if you prefer.
-ALLOWED_ORIGINS = "https://rinociardo.github.io,http://localhost:8000"
+ALLOWED_ORIGINS = "https://trails.rinociardo.com,https://rinociardo.github.io,http://localhost:8000"
 
 # Per visitor (IP address), per Cloudflare location: 30 routes a minute is far more
 # than planning needs (one per segment), and stops a runaway script quickly.

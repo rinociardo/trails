@@ -63,7 +63,7 @@ wanted eventually.
   ≤ ≈50 km apart (optional `"alternatives": true`: up to 3 routes, since v0.13.0, for
   recording gaps; deployed by the user 2026-11-12) and (since v0.10.0, 2026-10-29) `POST /geocode` (place search: text
   ≤ 200 characters, 8 results, optional focus point); **nothing else of openrouteservice
-  is reachable through it**. Only from `ALLOWED_ORIGINS` (rinociardo.github.io, localhost:8000), at most
+  is reachable through it**. Only from `ALLOWED_ORIGINS` (trails.rinociardo.com since v0.15.1, rinociardo.github.io while people move, localhost:8000), at most
   30 requests a minute per IP (Cloudflare Rate Limiting binding, approximate, per
   location). Key problems map to quota → 429, refused key → 502. **Every error has a body**
   (requested 2026-10-29): the relay's own refusals say why (`{"error": "…", "from":
@@ -103,9 +103,15 @@ wanted eventually.
   Attribution shown under the results and in Settings › Data sources. To be reused for
   From → To.
 - No build step: plain HTML/JS/CSS served as-is; ES modules.
-- **Hosting: GitHub Pages**, repo `rinociardo/trails`, URL https://rinociardo.github.io/trails/.
-  HTTPS is required for GPS, the service worker and installing. The `rinociardo.github.io`
-  origin is shared with the user's other projects: prefix cache/storage names (`trails-`).
+- **Hosting: Cloudflare Pages at https://trails.rinociardo.com/** (decided by the user 2026-11-13, v0.15.1; first planned as trail.rinociardo.com, changed the same day to **trails** with an s,
+  before inviting testers), connected to the `rinociardo/trails` repo: every push to `main` publishes, no
+  build step (output = repository root). rinociardo.com is registered at Porkbun with its DNS on Cloudflare
+  (found 2026-11-13: a wildcard sent every host to rinociardo-com.l.ink), so the custom domain's CNAME is
+  made in Cloudflare. Set-up steps: README › Publish. Until then: **GitHub Pages**, repo `rinociardo/trails`,
+  https://rinociardo.github.io/trails/, which **keeps working for a while** with a "moved" banner (see
+  "Moving to trails.rinociardo.com"). All app paths are relative (`./`), so the app runs at the root or in a
+  folder unchanged. HTTPS is required for GPS, the service worker and installing. Storage names stay
+  prefixed (`trails-`): the `rinociardo.github.io` origin is shared with the user's other projects.
 
 ## Requirements by area
 
@@ -655,6 +661,25 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   faked router, no live relay): Stop → box saved and linked, Edit with trims/cut/simplify and preview, Save
   edited walk, Make a new track, Update the track, Restore, Continue then Stop (still one walk), Snap to
   trails (3 requests, saved as a linked track), Discard.
+
+### Moving to trails.rinociardo.com (v0.15.1, requested 2026-11-13)
+- Checked for the move: `manifest.webmanifest` `start_url`/`scope` are `./`, the service worker is registered
+  as `sw.js` and caches `./…` paths, no absolute paths in the app: nothing changes at the root. Changed:
+  the service worker no longer caches `./index.html` (Cloudflare Pages redirects `/index.html` to `/`, and
+  Safari refuses a redirected answer for opening the app); offline opening uses `./`. GPX `creator` names
+  the new address. The relay allows `https://trails.rinociardo.com` (redeploy needed), github.io kept.
+- **Old address banner**: on `rinociardo.github.io` only (or with `?moved`), an amber banner on every opening
+  "Trails has moved to trails.rinociardo.com. Export your tracks (Track Library) and import them there." (×
+  hides it until the next opening), and the same note at the top of the Track Library.
+- **Data doesn't move by itself** (storage is per address, and per Home Screen app on iOS): GPX export/import.
+  To make that practical: **Export** on every Track Library row (without loading it); a walk is written with
+  `<type>walk</type>` on its `<trk>` and comes back under Walks; **Import GPX** takes several files at once
+  (all into the library, nothing loaded, unreadable files listed). User checklist: README "Moving your tracks
+  and walks". Not carried by GPX: versions, links, a walk's stats and gap choices, plan segments, settings.
+- Tested 2026-11-13: unit tests (walk type in GPX, relay accepts both addresses from `wrangler.toml`, refuses
+  look-alikes); headless browser (no live relay): banner only with `?moved`, ×, library note, multi-import
+  of a track, a walk and a broken file, row Export of a walk and re-import under Walks, offline opening
+  from the service worker without `index.html` cached.
 
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass

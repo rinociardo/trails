@@ -5,7 +5,8 @@ see distance done/remaining, and get an alert when you stray from the route.
 With no track loaded, Start records a free walk that you can export as GPX or save as a
 track; tracks without elevations get them from a DEM (Digital Elevation Model).
 
-Live site (once published): https://rinociardo.github.io/trails/
+Live site: **https://trails.rinociardo.com/** (Cloudflare Pages, since v0.15.1). The old address
+https://rinociardo.github.io/trails/ keeps working for a while, with a banner saying it has moved.
 
 ## Files
 
@@ -56,7 +57,13 @@ Developer switches (add to the address):
 - `?sim`: pressing Start replays the loaded track (with no track loaded: a 2 km square from the map centre or the last recorded point, for free recording) at 10× walking speed with realistic GPS noise, some bad fixes, a 45 s stop at 15% of the way and a 120 m detour at 30–38%, so you can see stop detection and the off-track alert without walking. `?sim=20` goes 20× (smoothing lag grows with speed, so very high values can cause false off-track alerts).
 - `?terrain=demo`: previews 3D terrain and hill shading over Innsbruck, using MapLibre's demo elevation tiles.
 
-## Publish to GitHub Pages
+## Publish
+
+Every push to `main` publishes to both addresses: Cloudflare Pages (trails.rinociardo.com) and
+GitHub Pages (the old address). To release a change: edit, bump `VERSION` in `sw.js`, commit,
+`git push`.
+
+### GitHub Pages (the old address, set up once)
 
 ```sh
 cd ~/Projects/Trails
@@ -65,7 +72,29 @@ gh api -X POST repos/rinociardo/trails/pages -f "source[branch]=main" -f "source
 gh api repos/rinociardo/trails/pages --jq '.status + "  " + .html_url'   # repeat until "built"
 ```
 
-To release a change: edit, bump `VERSION` in `sw.js`, commit, `git push`.
+
+### Cloudflare Pages (trails.rinociardo.com, set up once)
+
+rinociardo.com is registered at Porkbun, but its DNS (nameservers `aiden`/`sarah.ns.cloudflare.com`)
+is on Cloudflare: DNS records are made in Cloudflare, not at Porkbun. On 2026-11-13 every host of
+rinociardo.com, `trails` included (a wildcard), answered with a redirect to rinociardo-com.l.ink.
+
+1. Cloudflare dashboard (the account that has rinociardo.com) › **Workers & Pages** › **Create
+   application** › **Pages** › **Connect to Git** (if the page offers Workers first, look for the Pages
+   option or "Looking to deploy Pages? Get started"). Choose **GitHub**, authorise Cloudflare for the
+   `rinociardo/trails` repository only, select it, **Begin setup**.
+2. **Project name** `trails` (it becomes `trails.pages.dev`, or `trails-xxxx.pages.dev` if taken).
+   **Production branch** `main`. **Framework preset** None. **Build command** empty.
+   **Build output directory** empty (the repository root; if the form insists, `/`). **Save and Deploy**.
+   Wait for "Success", open the `….pages.dev` address: Trails opens.
+3. The project › **Custom domains** › **Set up a custom domain** › `trails.rinociardo.com` ›
+   **Continue**. Because rinociardo.com is on Cloudflare, it offers to create the DNS record itself:
+   **Activate domain**. That record is `CNAME trails → <project>.pages.dev` (proxied). If it says a
+   record for `trails` already exists: DNS › Records › edit or delete the existing `trails` record
+   first (the `*` wildcard can stay: a named record wins over it). Nothing to do at Porkbun.
+4. Wait until the domain shows **Active** (a few minutes; the certificate is issued then). Check:
+   `curl -sI https://trails.rinociardo.com/sw.js` answers `HTTP/2 200`, not a redirect to l.ink.
+   If it still redirects: Rules › Redirect Rules (and Page Rules) for a rule that covers all hosts.
 
 ## iPhone test plan
 
@@ -210,6 +239,32 @@ The steps are in the order you should run them.
    **Snap to trails:** Edit walk, then **Snap to trails (N requests)**. *Expect:* Plan opens with "… · on trails", the segments turn into trails one by one (N requests, straight if routing is down); **Save** puts a new track in Tracks with "made from “…”".
    **Discard:** Start, Stop, **Discard**, OK. *Expect:* the box closes, the walk is gone from Walks, and Go's numbers are cleared.
    **Real walk:** follow a saved track outdoors, Stop at the end. *Expect:* the same box; trim off the drive to the trailhead with **Trim start** and save; Export; the walk and the track show each other in the Track Library.
+
+34. **Moving to trails.rinociardo.com (v0.15.1).** After the Cloudflare set-up (see "Publish").
+   **Old address:** open the old Home Screen app (or `rinociardo.github.io/trails/` in Safari). *Expect:* an amber banner "Trails has moved to trails.rinociardo.com. Export your tracks (Track Library) and import them there." with ×; × hides it until the app is opened again; Track Library shows the same note at the top. (On the computer, `?moved` shows them at any address.)
+   **Export from a row:** Track Library › **Export** on a track, then on a walk: the Share sheet opens with that file, without loading it.
+   **New address:** follow "Moving your tracks and walks" below. *Expect:* Import GPX with several files selected says "Imported N tracks and M walks into the Track Library", walks land under **Walks**, tracks under **Tracks**, nothing is loaded. Place search and Plan's trail routing work there (they need the relay redeployed for v0.15.1). Settings › This device: **0.15.1**. Airplane Mode, reopen from the Home Screen: it opens.
+
+### Moving your tracks and walks (iPhone)
+
+Each address keeps its own data on the phone, and so does each Home Screen icon (a Home Screen app
+doesn't share storage with Safari). Your tracks and walks are in the **old Home Screen app**.
+
+1. **Old app** (the Trails icon you have now): if a walk is running, Stop it (it is saved as a walk).
+2. Track Library: for each track and each walk you want, **Export** › **Save to Files** › one folder
+   (e.g. iCloud Drive › *Trails move*). Same names on one day get "(1)" added by Files: that's fine.
+3. In **Safari**, open **trails.rinociardo.com** › Share › **Add to Home Screen** › Add.
+4. Open the **new** icon (not Safari: Safari's copy would not be seen by the Home Screen app).
+   Allow location when asked, then set Settings again (units, alerts, pause zone, elevation threshold):
+   settings don't move.
+5. Track Library › **Import GPX** › the *Trails move* folder › **Select** (top right) › select them
+   all › **Open**. Check the counts in the message, and that walks are under Walks.
+6. Load one track and check its totals against the old app.
+7. Keep the old icon until you're happy; then press and hold it › Remove App (that deletes its data).
+
+What doesn't move with GPX: earlier versions (Restore), the links between walks and tracks, a walk's
+moving/stopped times and gap choices, a planned track's trail/straight segments (Edit in Plan works on
+the line), downloaded elevation tiles (fetched again when needed) and the settings.
 
 ### If Wake Lock fails
 

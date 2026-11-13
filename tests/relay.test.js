@@ -164,3 +164,18 @@ test('relay: only routing and place search are relayed', async () => {
     }
     assert.equal(calls.length, 0);
 });
+
+test('relay: the deployed settings allow the new address and still the old one (v0.15.1)', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const toml = await readFile(new URL('../relay/wrangler.toml', import.meta.url), 'utf8');
+    const origins = /^ALLOWED_ORIGINS = "([^"]*)"/m.exec(toml)[1];
+    const deployed = { ...env, ALLOWED_ORIGINS: origins };
+    for (const site of ['https://trails.rinociardo.com', 'https://rinociardo.github.io']) {
+        fakeOrs(200, { type: 'FeatureCollection', features: [] });
+        const res = await worker.fetch(route(TWO_POINTS, site), deployed);
+        assert.equal(res.status, 200, site);
+        assert.equal(res.headers.get('Access-Control-Allow-Origin'), site);
+    }
+    fakeOrs(200, {});
+    assert.equal((await worker.fetch(route(TWO_POINTS, 'https://trails.rinociardo.com.evil.example'), deployed)).status, 403);
+});

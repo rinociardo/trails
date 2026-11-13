@@ -1,4 +1,4 @@
-// Minimal GPX reader: returns { name, points: [{lat, lon, ele}], waypoints }.
+// Minimal GPX reader: returns { name, points: [{lat, lon, ele}], waypoints, type }.
 // Uses track points (<trkpt>) and falls back to route points (<rtept>);
 // multiple segments/tracks are joined in file order. waypoints: the <wpt>s, as
 // [{ lat, lon, name, note, restroom, mile }].
@@ -34,7 +34,10 @@ export function parseGpx(text) {
     const nameNode = byTag('trk')[0]?.getElementsByTagNameNS('*', 'name')[0] ||
         byTag('rte')[0]?.getElementsByTagNameNS('*', 'name')[0] ||
         byTag('metadata')[0]?.getElementsByTagNameNS('*', 'name')[0];
-    return { name: nameNode ? nameNode.textContent.trim() : '', points, waypoints: readWaypoints(byTag('wpt')) };
+    // The track's own <type> (a direct child, not a gap point's <type>).
+    const typeNode = Array.from(byTag('trk')[0]?.children ?? []).find((n) => n.localName === 'type');
+    return { name: nameNode ? nameNode.textContent.trim() : '', points, waypoints: readWaypoints(byTag('wpt')),
+        type: typeNode ? typeNode.textContent.trim() : '' };
 }
 
 function readWaypoints(nodes) {
@@ -75,7 +78,9 @@ export const NO_ELEVATION_DESC = 'No elevation data (GPS altitude is not used). 
 // Start/Stop). Elevations and times are written when present. waypoints:
 // [{ lat, lon, ele?, name?, note?, restroom?, mile? }] become <wpt>s (sym "Restroom"
 // is the common symbol other hiking apps show as restrooms).
-export function buildGpx({ name = '', desc = '', segments, waypoints = [], time = Date.now() }) {
+// type: written as the track's <type> ("walk" for a recorded walk, so a re-import
+// puts it back under Track Library › Walks).
+export function buildGpx({ name = '', desc = '', type = '', segments, waypoints = [], time = Date.now() }) {
     const point = (p) => {
         let inner = '';
         if (Number.isFinite(p.ele)) inner += `<ele>${p.ele.toFixed(1)}</ele>`;
@@ -99,15 +104,16 @@ export function buildGpx({ name = '', desc = '', segments, waypoints = [], time 
     };
     const nameTag = name ? `<name>${escapeXml(name)}</name>` : '';
     const descTag = desc ? `<desc>${escapeXml(desc)}</desc>` : '';
+    const typeTag = type ? `<type>${escapeXml(type)}</type>` : '';
     return [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        '<gpx version="1.1" creator="Trails (https://rinociardo.github.io/trails/)"',
+        '<gpx version="1.1" creator="Trails (https://trails.rinociardo.com/)"',
         '     xmlns="http://www.topografix.com/GPX/1/1"',
         '     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
         '     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">',
         `  <metadata>${nameTag}${descTag}<time>${new Date(time).toISOString()}</time></metadata>`,
         ...waypoints.map(wpt), // GPX 1.1 wants these before the track
-        `  <trk>${nameTag}${descTag}`,
+        `  <trk>${nameTag}${descTag}${typeTag}`,
         ...segments.filter((seg) => seg.length).flatMap((seg) => ['    <trkseg>', ...seg.map(point), '    </trkseg>']),
         '  </trk>',
         '</gpx>',

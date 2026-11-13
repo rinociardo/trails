@@ -933,25 +933,60 @@ function openOnMyPosition() {
 }
 
 $('gpx-input').addEventListener('change', async (event) => {
-    const file = event.target.files[0];
+    const files = Array.from(event.target.files);
     event.target.value = ''; // allow choosing the same file again
+    if (files.length > 1) return importGpxFiles(files);
+    const file = files[0];
     if (!file) return;
     try {
-        const { name, points, waypoints } = parseGpx(await file.text());
+        const { name, points, waypoints, type } = parseGpx(await file.text());
         const trackName = name || file.name.replace(/\.gpx$/i, '');
         if (!await keepRecording(`Opening “${trackName}”`)) return;
         await setTrack(trackName, points, { waypoints });
         resetTrip();
         // Imported tracks go into the Track Library too (with DEM elevations once fetched).
-        await saveLibraryEntry({ id: `gpx-${Date.now()}`, name: trackName, points: track.points, eleInfo: track.eleInfo, waypoints, savedAt: Date.now() });
+        await saveLibraryEntry(importedEntry(trackName, track.points, track.eleInfo, waypoints, type));
         renderLibrary();
         showTab('go');
-        toast(`Imported ${formatDistance(track.total)} track into the Track Library: Start to follow it.`);
+        toast(`Imported ${formatDistance(track.total)} ${type === 'walk' ? 'walk' : 'track'} into the Track Library: Start to follow it.`);
     } catch (err) {
         console.error('GPX import failed:', err);
         toast(err.message || 'Could not read this file.', 5000);
     }
 });
+
+// A Track Library entry for an imported file. A walk exported by Trails (<type>walk</type>)
+// goes back under Walks.
+let importCount = 0;
+function importedEntry(name, points, eleInfo, waypoints, type) {
+    const walk = type === 'walk';
+    const id = `${walk ? 'walk-gpx' : 'gpx'}-${Date.now()}-${importCount++}`;
+    return { id, kind: walk ? 'walk' : 'track', name, points, eleInfo, waypoints, savedAt: Date.now() };
+}
+
+// Several files at once (moving to a new address): all go into the Track Library,
+// nothing is loaded, so the recording and the loaded track are left alone.
+async function importGpxFiles(files) {
+    let tracks = 0, walks = 0;
+    const failed = [];
+    for (const file of files) {
+        try {
+            const { name, points, waypoints, type } = parseGpx(await file.text());
+            const own = points.filter((p) => Number.isFinite(p.ele)).length;
+            const eleInfo = { own, dem: 0, missing: points.length - own, status: 'ok' };
+            await saveLibraryEntry(importedEntry(name || file.name.replace(/\.gpx$/i, ''), points, eleInfo, waypoints, type));
+            if (type === 'walk') walks++; else tracks++;
+        } catch (err) {
+            console.error('GPX import failed:', file.name, err);
+            failed.push(file.name);
+        }
+    }
+    renderLibrary();
+    showTab('library');
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    toast(`Imported ${plural(tracks, 'track')} and ${plural(walks, 'walk')} into the Track Library.` +
+        (failed.length ? ` Could not read: ${failed.join(', ')}.` : ''), failed.length ? 8000 : 4000);
+}
 
 // ---------- Off-track detection and alerts ----------
 
@@ -2487,7 +2522,7 @@ async function renderLibrary() {
     renderLibraryStatus();
 }
 
-// One Track Library entry: name, distance, Load / Edit / Delete, and a line with
+// One Track Library entry: name, distance, Load / Edit / Export / Delete, and a line with
 // its links (a walk's track, a track's walks) and Restore when an earlier version is kept.
 function libraryRow(entry, links, byId) {
     const row = document.createElement('div');
@@ -2509,6 +2544,15 @@ function libraryRow(entry, links, byId) {
     });
     const edit = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit' });
     edit.addEventListener('click', () => openPlanner(entry));
+    // Export straight from the library, without loading it (a walk is marked as one, so a
+    // re-import puts it back under Walks).
+    const exp = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Export' });
+    exp.addEventListener('click', () => {
+        const t = buildTrack(entry.points);
+        const desc = totalsText(t, buildProfile(t, settings.eleThresholdM));
+        exportGpx(buildGpx({ name: entry.name, desc, type: entryKind(entry) === 'walk' ? 'walk' : '', segments: [entry.points], waypoints: entry.waypoints ?? [] }),
+            gpxFileName(entry.name), entry.name);
+    });
     const del = Object.assign(document.createElement('button'), { type: 'button', className: 'danger', textContent: 'Delete' });
     del.addEventListener('click', async () => {
         const loaded = isLoaded();
@@ -2521,7 +2565,7 @@ function libraryRow(entry, links, byId) {
         if (loaded && hike.running) toast('Deleted from the library. Still loaded for your hike: Stop, then Unload track.', 5000);
         else if (loaded) await removeLoadedTrack({ confirmed: true });
     });
-    row.append(label, load, edit, del);
+    row.append(label, load, edit, exp, del);
 
     // The links and history line.
     const sub = document.createElement('div');
@@ -2834,6 +2878,19 @@ if ('serviceWorker' in navigator) {
 }
 
 $('reload-btn').addEventListener('click', () => location.reload());
+
+// ---------- Moved to trails.rinociardo.com (v0.15.1) ----------
+// The old address (GitHub Pages) keeps working for a while, with a banner on every
+// opening (× hides it until the next one) and a note in the Track Library. Data on
+// the phone belongs to one address, so tracks and walks move by GPX export/import.
+const NEW_HOME = 'https://trails.rinociardo.com/';
+if (location.hostname === 'rinociardo.github.io' || new URLSearchParams(location.search).has('moved')) {
+    $('moved-banner').hidden = false;
+    $('moved-note').hidden = false;
+    $('moved-close').addEventListener('click', () => { $('moved-banner').hidden = true; });
+}
+$('moved-banner').querySelector('a').href = NEW_HOME;
+
 
 $('update-btn').addEventListener('click', async () => {
     if (!swRegistration) return toast('Offline support is not active in this browser.');

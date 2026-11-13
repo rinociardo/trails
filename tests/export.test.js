@@ -100,3 +100,11 @@ test('gpx: a free recording says it has no elevations', () => {
     assert.equal(path.hasElevations, true);
     assert.doesNotMatch(buildGpx({ segments: [[{ lat: 1, lon: 2 }]] }), /<desc>/);
 });
+
+test('gpx: a walk is marked <type>walk</type> on the track (for re-import under Walks), a track is not', () => {
+    const seg = [{ lat: 46, lon: 8 }, { lat: 46.001, lon: 8 }];
+    const walk = buildGpx({ name: 'Walk', type: 'walk', segments: [seg] });
+    assert.match(walk, /<trk><name>Walk<\/name><type>walk<\/type>/);
+    assert.match(walk, /creator="Trails \(https:\/\/trails\.rinociardo\.com\/\)"/);
+    assert.doesNotMatch(buildGpx({ name: 'Track', segments: [seg] }), /<type>/);
+});

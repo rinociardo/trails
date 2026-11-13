@@ -1,6 +1,6 @@
 // Offline support for the app itself (not map tiles).
 // Bump VERSION on every release: it names the cache and is shown in Settings.
-const VERSION = '0.15.0';
+const VERSION = '0.15.1';
 const CACHE_PREFIX = 'trails-';
 const CACHE = `${CACHE_PREFIX}${VERSION}`;
 // Elevation tiles stored by the page (dem-tiles.js): kept across versions.
@@ -10,8 +10,9 @@ const KEEP_CACHES = ['trails-dem-tiles'];
 const NETWORK_TIMEOUT_MS = 3000;
 
 const APP_FILES = [
+    // './' only, not './index.html': Cloudflare Pages redirects /index.html to /, and
+    // Safari refuses a redirected answer from the service worker for opening the app.
     './',
-    './index.html',
     './app.js',
     './geo.js',
     './gpx.js',
@@ -59,7 +60,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
     event.waitUntil(
         caches.keys()
-            // Only our own caches: other apps on the same github.io site share this storage.
+            // Only our own caches: on github.io other apps of the same site share this storage.
             .then((keys) => Promise.all(keys
                 .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE && !KEEP_CACHES.includes(key))
                 .map((key) => caches.delete(key))))
@@ -87,7 +88,7 @@ async function networkFirst(request) {
         return await Promise.race([network, timeout]);
     } catch {
         const cached = await cache.match(request, { ignoreSearch: true }) ||
-            (request.mode === 'navigate' && await cache.match('./index.html'));
+            (request.mode === 'navigate' && await cache.match('./'));
         return cached || network;
     }
 }
