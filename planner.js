@@ -42,6 +42,7 @@ export function createPlanner(deps) {
     let dirty = false;
     let rev = 0;             // bumped on every change: results computed for an older rev are stale
     let result = null;       // last DEM result: { rev, points, track, profile, steep, filled, missing }
+    let fromWalk = null;
     let pending = null;      // Promise of the elevation run in progress
     let timer = null;
     let dragIndex = null;    // vertex being dragged after inserting it from a middle handle
@@ -277,6 +278,8 @@ export function createPlanner(deps) {
     // as a new entry, so the recording itself is kept.
     function open(entry = null) {
         waypoints = entry?.waypoints ?? [];
+        // The walk a track is made from (Track Library shows the link).
+        fromWalk = entry?.fromWalk ?? (entry?.kind === 'walk' || String(entry?.id ?? '').startsWith('walk-') ? entry.id : null);
         if (entry?.plan) {
             // Plans saved before routing existed have no routes: keep their
             // trail segments as drawn rather than routing them all at once.
@@ -327,6 +330,8 @@ export function createPlanner(deps) {
                 eleInfo: { own: 0, dem: r.filled, missing: r.missing, status: r.missing ? 'failed' : 'ok' },
                 plan: editor.snapshot(),
                 waypoints,
+                kind: 'track',
+                ...(fromWalk ? { fromWalk } : {}),
                 savedAt: Date.now(),
             };
             await deps.saveEntry(entry);

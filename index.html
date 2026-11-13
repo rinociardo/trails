@@ -136,7 +136,7 @@
         .library-row button { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text); }
         .library-row button.danger { color: var(--danger); }
         .lib-line { margin: 0 0 8px; font-size: 14px; }
-        .library-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .library-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .credits { margin: 4px 0 0; padding-left: 18px; font-size: 11px; color: var(--panel-muted); }
 
         .profile { position: relative; height: 96px; margin-top: 6px; touch-action: none; }
@@ -365,6 +365,19 @@
         #gap-review .actions { margin-top: 8px; grid-template-columns: 1fr 1fr 1fr; }
         #gap-review .primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
         body.gap-review #library-page { display: none; }
+        /* Go › Stop: the walk-finished box (over the trip panel). */
+        body.walk-finished[data-tab="go"] #trip-panel, body.walk-finished[data-tab="go"] #next-waypoint { display: none; }
+        #finish-box { max-height: calc(100% - var(--bottom-h, 120px) - var(--stats-h, 0px) - 30px); overflow-y: auto; }
+        #finish-box h2 { font-size: 17px; margin: 0 0 4px; }
+        #finish-box .lib-line { margin: 0 0 6px; }
+        #finish-box .actions { margin-top: 6px; grid-template-columns: 1fr 1fr; }
+        #finish-box .primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+        #finish-edit label.range { display: grid; grid-template-columns: 7.5em 1fr 4.5em; gap: 6px; align-items: center; margin: 4px 0; }
+        #finish-edit label.range output { text-align: right; font-variant-numeric: tabular-nums; }
+        #finish-edit input[type=range] { width: 100%; }
+        #finish-edit .check { display: flex; gap: 6px; align-items: center; margin: 6px 0 2px; }
+        .lib-sub { grid-column: 1 / -1; margin: -2px 0 4px; font-size: 13px; color: var(--panel-muted); white-space: normal; }
+        .lib-sub .link-btn { font-size: 13px; padding: 0 0 0 6px; }
         .gap-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
         .gap-row button { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--panel); color: var(--panel-text); }
         #search-results {
@@ -692,6 +705,50 @@
         </div>
     </div>
 
+    <!-- Go › Stop: the walk is saved; what to do with it. -->
+    <div id="finish-box" class="floating-box" data-tabs="go" hidden>
+        <div id="finish-main">
+            <h2>Walk finished</h2>
+            <p class="lib-line" id="finish-summary"></p>
+            <p class="lib-line" id="finish-saved"></p>
+            <div class="actions">
+                <button type="button" class="primary-action" id="finish-done">Done</button>
+                <button type="button" id="finish-continue">Continue walk</button>
+                <button type="button" id="finish-edit-btn">Edit walk</button>
+                <button type="button" id="finish-track-btn">Make a new track</button>
+                <button type="button" id="finish-update-btn" hidden>Update the track</button>
+                <button type="button" id="finish-export-btn">Export</button>
+                <button type="button" id="finish-gaps-btn" hidden>Review gaps</button>
+                <button type="button" class="danger" id="finish-discard-btn">Discard</button>
+            </div>
+        </div>
+        <div id="finish-edit" hidden>
+            <h2>Edit walk</h2>
+            <label class="range"><span>Trim start</span><input type="range" id="edit-trim-start" min="0" value="0"><output id="edit-trim-start-out"></output></label>
+            <label class="range"><span>Trim end</span><input type="range" id="edit-trim-end" min="0" value="0"><output id="edit-trim-end-out"></output></label>
+            <label class="check"><input type="checkbox" id="edit-cut-on"> Cut out a stretch</label>
+            <div id="edit-cut" hidden>
+                <label class="range"><span>From</span><input type="range" id="edit-cut-from" min="0" value="0"><output id="edit-cut-from-out"></output></label>
+                <label class="range"><span>To</span><input type="range" id="edit-cut-to" min="0" value="0"><output id="edit-cut-to-out"></output></label>
+            </div>
+            <label class="field"><span>Simplify</span>
+                <select id="edit-simplify">
+                    <option value="0">Off: keep every point</option>
+                    <option value="3">Light (3 m)</option>
+                    <option value="10">Medium (10 m)</option>
+                    <option value="25">Strong (25 m)</option>
+                </select>
+            </label>
+            <p class="lib-line" id="edit-result"></p>
+            <div class="actions">
+                <button type="button" class="primary-action" id="edit-save">Save edited walk</button>
+                <button type="button" id="edit-snap">Snap to trails</button>
+                <button type="button" id="edit-back">Back</button>
+            </div>
+            <p class="hint" id="edit-hint">Grey dashed parts are removed. A cut joins its two sides with a straight line. The walk's earlier version is kept: Track Library › Restore. Snap to trails opens Plan with the edited walk routed along trails, one request per segment, and saves a new track.</p>
+        </div>
+    </div>
+
     <!-- Go: the next waypoint of the track (trail guides). Tap for the whole note. -->
     <button type="button" id="next-waypoint" data-tabs="go" hidden></button>
 
@@ -744,7 +801,7 @@
                 <div><span>Vertical</span><b id="w-vert">–</b></div>
                 <div><span>Avg up</span><b id="w-vert-up">–</b></div>
                 <div><span>Avg down</span><b id="w-vert-down">–</b></div>
-                <div class="walk-action"><button type="button" class="link-btn" id="save-walk-btn" hidden>Save as track</button></div>
+                <div class="walk-action"><button type="button" class="link-btn" id="save-walk-btn" hidden>Save walk</button></div>
             </div>
             <div class="walk-note plan-hide" id="walk-note" data-tabs="go" hidden></div>
         </div>
@@ -752,9 +809,12 @@
 
     <!-- Track Library: saved tracks and walks, import, export, save as track. -->
     <section class="page" id="library-page" data-tabs="library">
-        <h3>Saved tracks and walks</h3>
+        <h3>Tracks</h3>
         <div id="library"></div>
-        <p class="hint" id="library-empty">None yet. Import a GPX, draw a track in Plan, or save a recorded walk.</p>
+        <p class="hint" id="library-empty">None yet. Import a GPX, draw a track in Plan, or make one from a walk.</p>
+        <h3>Walks</h3>
+        <div id="library-walks"></div>
+        <p class="hint" id="library-walks-empty">None yet. Every walk is saved here when you press Stop.</p>
         <div class="actions">
             <label class="button" for="gpx-input">Import GPX</label>
             <button type="button" id="lib-new-track-btn">New track</button>
@@ -773,7 +833,7 @@
         <p class="lib-line" id="lib-recording">Nothing recorded</p>
         <div class="actions">
             <button type="button" id="export-hike-btn">Export my hike</button>
-            <button type="button" id="save-walk-lib-btn">Save as track</button>
+            <button type="button" id="save-walk-lib-btn">Save walk</button>
             <button type="button" class="danger" id="reset-trip-btn">Reset walked/time</button>
         </div>
         <div id="gap-section" hidden>
@@ -982,7 +1042,7 @@
             <p id="keep-details"></p>
             <div class="actions">
                 <button type="button" id="keep-export">Export</button>
-                <button type="button" class="primary-action" id="keep-save" autofocus>Save as track</button>
+                <button type="button" class="primary-action" id="keep-save" autofocus>Save walk</button>
                 <button type="button" class="danger" id="keep-discard">Discard</button>
                 <button type="button" id="keep-cancel">Cancel</button>
             </div>

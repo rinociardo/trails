@@ -30,6 +30,7 @@ function buildStyle(basemap) {
             plan: { type: 'geojson', data: EMPTY },
             accuracy: { type: 'geojson', data: EMPTY },
             debug: { type: 'geojson', data: EMPTY },
+            edit: { type: 'geojson', data: EMPTY },
         },
         layers: [
             { id: 'basemap', type: 'raster', source: 'basemap' },
@@ -68,6 +69,31 @@ function buildStyle(basemap) {
                 filter: ['get', 'gap'],
                 layout: { 'line-join': 'round' },
                 paint: { 'line-color': '#d6336c', 'line-width': 3, 'line-dasharray': [1.5, 1.5] },
+            },
+            // Walk finished › Edit: what is kept (pink) and what is removed (grey, dashed).
+            {
+                id: 'edit-removed-casing', type: 'line', source: 'edit',
+                filter: ['!', ['get', 'kept']],
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#ffffff', 'line-width': 7 },
+            },
+            {
+                id: 'edit-removed', type: 'line', source: 'edit',
+                filter: ['!', ['get', 'kept']],
+                layout: { 'line-join': 'round' },
+                paint: { 'line-color': '#4b5058', 'line-width': 4, 'line-dasharray': [1.2, 1] },
+            },
+            {
+                id: 'edit-kept-casing', type: 'line', source: 'edit',
+                filter: ['get', 'kept'],
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#ffffff', 'line-width': 7 },
+            },
+            {
+                id: 'edit-kept', type: 'line', source: 'edit',
+                filter: ['get', 'kept'],
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#d6336c', 'line-width': 4 },
             },
             // Smart Pause: the zone you must leave for the hike to resume.
             {
@@ -414,6 +440,24 @@ export function createMapView({ container, center, zoom, pitch = 0, terrain = nu
                 .filter((f) => f.coordinates.length)
                 .map(({ gap, coordinates }) => ({ type: 'Feature', properties: { gap }, geometry: { type: 'MultiLineString', coordinates } }));
             ready.then(() => map.getSource('walked').setData({ type: 'FeatureCollection', features }));
+        },
+
+        // Walk finished › Edit preview: kept points and removed runs (null clears it).
+        // fit: zoom to the whole walk.
+        setEditPreview(kept, removed = [], { fit = false, bottom = 330 } = {}) {
+            if (!kept) {
+                ready.then(() => map.getSource('edit').setData(EMPTY));
+                return;
+            }
+            const feature = (points, isKept) => ({ type: 'Feature', properties: { kept: isKept }, geometry: { type: 'LineString', coordinates: points.map((p) => [p.lon, p.lat]) } });
+            const features = [...removed.filter((r) => r.length > 1).map((r) => feature(r, false)), ...(kept.length > 1 ? [feature(kept, true)] : [])];
+            ready.then(() => map.getSource('edit').setData({ type: 'FeatureCollection', features }));
+            const all = [...kept, ...removed.flat()];
+            if (fit && all.length) {
+                const lons = all.map((p) => p.lon), lats = all.map((p) => p.lat);
+                map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+                    { padding: { top: 30, bottom, left: 40, right: 40 }, maxZoom: 17, duration: 0 });
+            }
         },
 
         // Smart Pause zone (null clears it).

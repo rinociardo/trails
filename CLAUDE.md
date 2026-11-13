@@ -254,6 +254,8 @@ wanted eventually.
   the file was really shared or downloaded (closing the Share sheet keeps the question
   open). Points recorded after an export/save make it unsaved again. Reverse direction and
   Remove track don't clear the recording, so they don't ask.
+- Since v0.15.0 the walk is saved by itself on every Stop (see "Walk finished") and the buttons
+  say **Save walk**; the walk goes to Track Library › Walks.
 - **Save as track** (panel button after a recording, and Settings › Export): stores the
   walked path (segments joined, doubled stop points removed) in **Settings › Saved walks**
   (IndexedDB key `library`), named `Walk YYYY-MM-DD HH:MM` (with a track: `Track (walked …)`).
@@ -614,6 +616,46 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   headless browser: both comma formats, no geocode request, Copy, right-click menu, Start/End into the
   planner with one (faked) route request.
 
+### Walk finished, walks and tracks (built in v0.15.0, requested 2026-11-12; pushed 2026-11-13 with the user's OK, awaiting iPhone testing)
+- **Every walk is saved and linked** (`saveWalkEntry` in `app.js`): on every Go › Stop the recording is saved
+  to the Track Library as a **walk** (`kind: 'walk'`, one entry per recording, `hike.walkId`, kept with the
+  recording so a force-close doesn't make a second one). Stop then Start (or Continue walk) updates the same
+  entry. Linked to the loaded track when that is in the Track Library (`trackId`, plus `trackName`); the test
+  loop and tracks not in the library aren't linked ("not in the library"). It keeps the walk's numbers
+  (`stats`: walked, moving, stopped, paused, ascent, descent, gaps) and `recordedAt`. Elevations as before
+  (DEM recorded while walking; missing ones filled from the DEM). "Save as track" buttons are now **Save walk**.
+- **Walk finished** box on Go after Stop (only when something was recorded; over the trip panel):
+  distance, moving, stopped, paused, ascent/descent, gaps; "Saved in Track Library › Walks as “…”". Buttons:
+  **Done**, **Continue walk** (Start again, same walk), **Edit walk**, **Make a new track** (a track entry
+  `Walk name · track` from the walk as it is now, edited or not, `fromWalk` link; the walk stays),
+  **Update “Track”** (only when the walk is linked to a track in the library), **Export** (Export my hike),
+  **Review gaps (N)** (only with gaps: Track Library gap review), **Discard** (confirm; deletes the walk
+  entry and clears the recording).
+- **Edit walk** (`walk-edit.js`, pure): sliders **Trim start**, **Trim end**, **Cut out a stretch** (From / To,
+  distances along the walk; the two sides joined by a straight line), **Simplify** Off / Light (3 m) /
+  Medium (10 m) / Strong (25 m) (Douglas-Peucker). Map preview: kept part pink, removed parts dark grey
+  dashed, zoomed to the walk above the box; "Kept 4.21 km of 4.50 km · 812 points". **Save edited walk**
+  replaces the walk's points, the recorded version kept (Restore). **Snap to trails (N requests)**: the edited
+  walk simplified to at most **25** segments (the relay allows 30 a minute), each a trail segment routed by
+  the planner (one request each, same fallbacks as the planner), opened in Plan as `Walk name · on trails`;
+  Save there makes a new track linked to the walk. **Back**.
+- **Update the track with this walk**: confirm, then the linked track's points become the walk's (planned
+  segments dropped; waypoints kept where they are, re-located on load); the old version is kept. If that
+  track is loaded it is reloaded.
+- **Versions and Restore**: updating a track, saving an edited walk, saving over a track in Plan, and walking
+  on after an edit keep the replaced version (`versions`, newest first, at most **5**; `versionReason` says what
+  made the current one). Track Library › **Restore previous version** (confirm with both lengths) goes back one
+  version; the loaded track is reloaded if it was that one (not during a hike).
+- **Track Library** is split into **Tracks** and **Walks** (newest first). Under each row a line with its links
+  and history: a walk: date, moving time, ascent, "along “Track”" or "free walk", what edited it; a track: its
+  walks ("2 walks: dates"), "made from “Walk”", "updated with the walk of …". Entries from before v0.15.0
+  have no `kind`: ids `walk-…` are walks, the rest tracks.
+- Tested 2026-11-12: unit tests (`tests/walk-edit.test.js`: trim with elevations, cut, simplify, snap request
+  cap, versions and Restore, links); headless browser (simulated GPS on the sample added to the library,
+  faked router, no live relay): Stop → box saved and linked, Edit with trims/cut/simplify and preview, Save
+  edited walk, Make a new track, Update the track, Restore, Continue then Stop (still one walk), Snap to
+  trails (3 requests, saved as a linked track), Discard.
+
 ### Still to build
 - **Trail scan** (Explore): the legacy prototype's "Scan for Trails" asked Overpass
   (overpass-api.de) for `highway=path` and `route=hiking` in the view and drew them. To
@@ -657,7 +699,7 @@ milestone sheet: one line per milestone, "mileage  description", `*` after the m
   trail-guide importer).
 - Developer switches: `?sim` / `?sim=N` (replays the loaded track with noise, a stop and a
   120 m detour) and `?terrain=demo` (3D terrain preview over Innsbruck).
-- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `gaps.js`, `pause.js`, `coords.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
+- Pure logic lives in `geo.js`, `elevation.js`, `tracker.js`, `walk.js`, `gaps.js`, `pause.js`, `coords.js`, `walk-edit.js`, `dem.js`, `plan.js`, `guide.js`, `units.js` and the writer in `gpx.js`, unit-tested in `tests/`;
   keep it free of browser APIs so it stays testable with Node. `dem-tiles.js` is the browser
   side of the DEM (fetch + decode PNG tiles); `planner.js` is the planner screen; `guide-import.js` the trail-guide importer; `router.js`
   the routing service and `geocoder.js` the place search (both through the relay in `relay/`,

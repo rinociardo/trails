@@ -10,6 +10,7 @@ import { GAP_MIN_MS, DEFAULT_GAP_MAX_SPEED_MPS, gapPlan, straightOption, paceBef
 import { fillGap, needsWork } from './gap-fill.js';
 import { PauseWatcher, DEFAULT_PAUSE_RADIUS_M, walkedUnseenMs } from './pause.js';
 import { parseCoordinates, formatCoordinates } from './coords.js';
+import { editWalk, snapPlan, cumulative, entryKind, withNewVersion, restoreVersion, libraryLinks } from './walk-edit.js';
 import { ClimbCounter, WalkRates, OffTrackDetector, averageRates, walkSnapshot, restoreWalk, nextAlertMode, LEVEL_MPS, SPEED_WINDOW_MS } from './walk.js';
 import { createPlanner } from './planner.js';
 import { createGuideImport } from './guide-import.js';
@@ -216,7 +217,8 @@ const planner = createPlanner({
     view,
     chart,
     settings,
-    saveEntry: saveLibraryEntry,
+    // Saving over a saved track keeps its earlier version (Track Library › Restore).
+    saveEntry: (entry) => saveLibraryEntry(entry, { keepVersion: 'edited in Plan' }),
     exportGpx,
     toast,
     formatDistance,
@@ -306,6 +308,7 @@ const hike = {
     lastAlertAt: 0,
     dimmed: false,
     savedPoints: 0,     // path.pointCount when the walk was last exported or saved as a track
+    walkId: null,       // this recording's walk in the Track Library (saved on every Stop)
 };
 
 // Recent fixes for the debug view.
@@ -645,6 +648,7 @@ function resetTrip() {
     debug.smooth = [];
     debug.discarded = 0;
     hike.savedPoints = 0;
+    hike.walkId = null;
     climb.reset();
     rates.reset();
     gaps = [];
@@ -685,6 +689,7 @@ function saveRecording() {
         prevAlong: hike.prevAlong,
         progress: hike.progress,
         savedPoints: hike.savedPoints,
+        walkId: hike.walkId,
         walk: walkSnapshot(climb, rates),
         gaps,
         pausedMs: hike.pausedMs,
@@ -721,6 +726,7 @@ function restoreRecording(saved) {
         gaps = Array.isArray(saved.gaps) ? saved.gaps : [];
         hike.pausedMs = saved.pausedMs ?? 0;
         hike.savedPoints = saved.savedPoints ?? 0;
+        hike.walkId = saved.walkId ?? null;
         hike.alertOverride = saved.alertOverride ?? null;
         renderAlertToggle();
         if (saved.trackKey && saved.trackKey === trackKey() && saved.progress) {
@@ -1789,8 +1795,13 @@ function stopHike() {
 }
 
 $('start-btn').addEventListener('click', () => {
-    if (hike.running) stopHike();
-    else startHike();
+    if (hike.running) {
+        stopHike();
+        showFinish();
+    } else {
+        hideFinish();
+        startHike();
+    }
 });
 
 $('center-btn').addEventListener('click', () => {
@@ -2116,7 +2127,7 @@ function keepRecording(action) {
         $('keep-export').onclick = async () => { if (await exportHike()) done(true); };
         $('keep-save').onclick = async () => {
             $('keep-save').disabled = true;
-            const saved = await saveWalkAsTrack();
+            const saved = await saveWalkEntry();
             $('keep-save').disabled = false;
             if (saved) done(true);
         };
@@ -2140,11 +2151,13 @@ function walkedPoints() {
 
 const loadLibrary = async () => (await kvGet('library')) || [];
 
-// Adds an entry to the Track Library, or replaces the one with the same id (an edited track).
-async function saveLibraryEntry(entry) {
+// Adds an entry to the Track Library, or replaces the one with the same id (an
+// edited track). keepVersion (a reason): the replaced one is kept for Restore.
+async function saveLibraryEntry(entry, { keepVersion = null } = {}) {
     const entries = await loadLibrary();
     const i = entries.findIndex((e) => e.id === entry.id);
-    if (i >= 0) entries[i] = entry;
+    if (i >= 0 && keepVersion) entries[i] = withNewVersion(entries[i], entry, Date.now(), keepVersion);
+    else if (i >= 0) entries[i] = entry;
     else entries.push(entry);
     await kvSet('library', entries);
     requestPersistence();
@@ -2169,49 +2182,260 @@ $('edit-loaded-btn').addEventListener('click', () => {
     openPlanner({ name: track.name || 'Track', points: track.points, waypoints: track.waypoints });
 });
 
-// Saves the walk to the Track Library with its elevations (DEM, recorded as you
-// walked); points recorded with no signal get them from the DEM now, if it can be reached.
-async function saveWalkAsTrack() {
+// The loaded track's Track Library entry (not the test loop), if it is there.
+function loadedTrackEntry(entries) {
+    if (!track || track.temporary) return null;
+    const key = trackKey();
+    return entries.find((e) => entryKind(e) === 'track' && trackKeyOf({ name: e.name, points: e.points, total: buildTrack(e.points).total }) === key) ?? null;
+}
+
+// The recording as a walk in the Track Library: one entry per recording, saved
+// on every Stop (and by Save walk), linked to the loaded track when that is in
+// the library. Elevations: the DEM's, recorded as you walked; points recorded
+// with no signal get them now, if the DEM can be reached.
+async function saveWalkEntry({ quiet = false } = {}) {
     const points = walkedPoints();
     if (points.length < 2) {
-        toast('Nothing recorded yet: press Start and walk a little.');
-        return false;
+        if (!quiet) toast('Nothing recorded yet: press Start and walk a little.');
+        return null;
     }
     const pointCount = path.pointCount;
     const name = track ? `${track.name} (walked ${formatDateTime(path.startTime)})` : `Walk ${formatDateTime(path.startTime)}`;
     const own = points.filter((p) => Number.isFinite(p.ele)).length;
-    toast(`Saving “${name}”: getting elevations from the DEM…`, 20_000);
+    if (!quiet) toast(`Saving “${name}”: getting elevations from the DEM…`, 20_000);
     let result = null;
-    try {
-        result = await fillElevationsFromDem(points);
-    } catch (err) {
-        console.error('DEM elevations failed:', err);
+    if (own < points.length) {
+        try {
+            result = await fillElevationsFromDem(points);
+        } catch (err) {
+            console.error('DEM elevations failed:', err);
+        }
     }
     const dem = result?.filled ?? 0;
     const missing = points.length - own - dem;
-    const entry = {
-        id: `walk-${Date.now()}`,
-        name,
-        points: result?.points ?? points,
-        eleInfo: { own, dem, missing, status: !missing ? 'ok' : result?.tooLarge ? 'tooLarge' : 'failed' },
-        savedAt: Date.now(),
-    };
+    const t = walkTotals();
+    let entry;
     try {
+        const entries = await loadLibrary();
+        const existing = hike.walkId ? entries.find((e) => e.id === hike.walkId) : null;
+        const trackEntry = loadedTrackEntry(entries);
+        const fields = {
+            kind: 'walk',
+            points: result?.points ?? points,
+            eleInfo: { own, dem, missing, status: !missing ? 'ok' : result?.tooLarge ? 'tooLarge' : 'failed' },
+            trackId: trackEntry?.id ?? existing?.trackId ?? null,
+            trackName: track && !track.temporary ? track.name : existing?.trackName ?? null,
+            stats: { walked: t.walked, movingMs: t.movingMs, stoppedMs: t.stoppedMs, pausedMs: t.pausedMs, ascent: t.ascent, descent: t.descent, gaps: gaps.length },
+            recordedAt: path.startTime,
+            edited: false,
+        };
+        const now = Date.now();
+        // Walked on after an edit: the whole recording again, the edit kept as a version.
+        entry = existing?.edited ? withNewVersion(existing, fields, now, 'walked on after an edit')
+            : { ...(existing ?? { id: `walk-${now}`, name }), ...fields, savedAt: now };
+        hike.walkId = entry.id;
         await saveLibraryEntry(entry);
     } catch (err) {
         console.error('Saving walk failed:', err);
-        toast('Could not save the walk on this device.', 5000);
-        return false;
+        toast('Could not save the walk on this device: export it instead.', 5000);
+        return null;
     }
     markWalkSaved(pointCount);
     renderLibrary();
-    toast(`Saved “${name}” in the Track Library. ` +
-        (missing ? `${missing} points still need elevations (offline?): they are fetched when you load it.` : 'Elevations from the DEM.'), 7000);
-    return true;
+    if (!quiet) {
+        toast(`Saved “${entry.name}” in the Track Library › Walks. ` +
+            (missing ? `${missing} points still need elevations (offline?): they are fetched when you load it.` : 'Elevations from the DEM.'), 7000);
+    }
+    return entry;
 }
 
-$('save-walk-btn').addEventListener('click', () => saveWalkAsTrack());
-$('save-walk-lib-btn').addEventListener('click', () => saveWalkAsTrack());
+// The recording's walk entry (saved now if it isn't yet).
+async function currentWalkEntry() {
+    const entries = await loadLibrary();
+    return (hike.walkId && entries.find((e) => e.id === hike.walkId)) || saveWalkEntry({ quiet: true });
+}
+
+$('save-walk-btn').addEventListener('click', () => saveWalkEntry());
+$('save-walk-lib-btn').addEventListener('click', () => saveWalkEntry());
+
+// ---------- Walk finished (Go › Stop): the walk is saved; edit it, make a track, update the track ----------
+
+let editing = null;   // the walk entry being edited
+
+async function showFinish() {
+    if (path.pointCount < 2) return; // nothing recorded
+    document.body.classList.add('walk-finished');
+    $('finish-box').hidden = false;
+    closeWalkEdit();
+    renderFinish('Saving in the Track Library…');
+    const entry = await saveWalkEntry({ quiet: true });
+    renderFinish(entry ? `Saved in Track Library › Walks as “${entry.name}”.` : 'Could not save it on this device: Export it.', entry);
+}
+
+function hideFinish() {
+    if ($('finish-box').hidden) return;
+    closeWalkEdit();
+    document.body.classList.remove('walk-finished');
+    $('finish-box').hidden = true;
+}
+
+async function renderFinish(savedText, entry = null) {
+    const t = walkTotals();
+    setText($('finish-summary'), `${formatDistance(t.walked)} · moving ${formatDuration(t.movingMs)} · stopped ${formatDuration(t.stoppedMs)}` +
+        (t.pausedMs > 0 ? ` · paused ${formatDuration(t.pausedMs)}` : '') +
+        ` · ↑ ${formatMetres(t.ascent)} ↓ ${formatMetres(t.descent)}` +
+        (gaps.length ? ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''} filled` : ''));
+    setText($('finish-saved'), savedText);
+    $('finish-gaps-btn').hidden = !gaps.length;
+    setText($('finish-gaps-btn'), `Review gaps (${gaps.length})`);
+    const target = entry?.trackId ? (await loadLibrary()).find((e) => e.id === entry.trackId) : null;
+    $('finish-update-btn').hidden = !target;
+    if (target) setText($('finish-update-btn'), `Update “${target.name}”`);
+    for (const id of ['finish-edit-btn', 'finish-track-btn', 'finish-update-btn']) $(id).disabled = !entry;
+}
+
+$('finish-done').addEventListener('click', () => hideFinish());
+$('finish-continue').addEventListener('click', () => {
+    hideFinish();
+    startHike();
+});
+$('finish-export-btn').addEventListener('click', () => exportHike());
+$('finish-gaps-btn').addEventListener('click', () => {
+    hideFinish();
+    showTab('library');
+    openGapReview(0);
+});
+$('finish-discard-btn').addEventListener('click', async () => {
+    if (!confirm('Discard this walk? It is deleted from the Track Library and the recording is cleared. This can\'t be undone.')) return;
+    const id = hike.walkId;
+    if (id) await kvSet('library', (await loadLibrary()).filter((e) => e.id !== id));
+    hideFinish();
+    discardRecording();
+    renderLibrary();
+    toast('Walk discarded.');
+});
+
+// A new track from the walk (as it is now, edited or not); the walk stays.
+$('finish-track-btn').addEventListener('click', async () => {
+    const walk = await currentWalkEntry();
+    if (!walk) return;
+    const entry = { id: `track-${Date.now()}`, kind: 'track', name: `${walk.name} · track`, points: walk.points, eleInfo: walk.eleInfo, fromWalk: walk.id, savedAt: Date.now() };
+    await saveLibraryEntry(entry);
+    renderLibrary();
+    toast(`Made the track “${entry.name}” (Track Library › Tracks). Load it there to follow it, or Edit it in Plan.`, 6000);
+});
+
+// The track you followed becomes this walk; its current version is kept for Restore.
+$('finish-update-btn').addEventListener('click', async () => {
+    const walk = await currentWalkEntry();
+    const entries = await loadLibrary();
+    const old = walk?.trackId ? entries.find((e) => e.id === walk.trackId) : null;
+    if (!old) return toast('The track is no longer in the Track Library.');
+    if (!confirm(`Replace “${old.name}” (${formatDistance(buildTrack(old.points).total)}) with this walk (${formatDistance(buildTrack(walk.points).total)})? ` +
+        'Its current version is kept: Track Library › Restore brings it back. Its waypoints stay where they are.')) return;
+    const wasLoaded = loadedTrackEntry(entries)?.id === old.id;
+    const updated = withNewVersion(old, { points: walk.points, eleInfo: walk.eleInfo, plan: null, updatedFrom: walk.id }, Date.now(), `updated with the walk of ${formatDateTime(walk.recordedAt ?? walk.savedAt)}`);
+    delete updated.plan;
+    await saveLibraryEntry(updated);
+    if (wasLoaded) {
+        await setTrack(updated.name, updated.points, { eleInfo: updated.eleInfo, waypoints: updated.waypoints });
+        saveRecording();
+    }
+    renderLibrary();
+    toast(`Updated “${old.name}” with this walk. Track Library › Restore brings the old version back.`, 6000);
+});
+
+// ---------- Walk finished › Edit walk: trim, cut out, simplify, snap to trails ----------
+
+const EDIT_RANGES = ['edit-trim-start', 'edit-trim-end', 'edit-cut-from', 'edit-cut-to'];
+
+$('finish-edit-btn').addEventListener('click', async () => {
+    const walk = await currentWalkEntry();
+    if (!walk) return;
+    editing = walk;
+    const total = Math.round(cumulative(walk.points).at(-1));
+    const step = Math.max(1, Math.round(total / 500));
+    for (const id of EDIT_RANGES) Object.assign($(id), { max: total, step, value: 0 });
+    $('edit-cut-from').value = Math.round(total * 0.4);
+    $('edit-cut-to').value = Math.round(total * 0.6);
+    $('edit-cut-on').checked = false;
+    $('edit-cut').hidden = true;
+    $('edit-simplify').value = '0';
+    $('finish-main').hidden = true;
+    $('finish-edit').hidden = false;
+    view.setWalked([]); // the preview replaces the pink line
+    updateWalkEdit(true);
+});
+
+function closeWalkEdit() {
+    if (!editing) return;
+    editing = null;
+    $('finish-main').hidden = false;
+    $('finish-edit').hidden = true;
+    view.setEditPreview(null);
+    renderWalkedPath(true);
+}
+
+function currentEdit() {
+    const v = (id) => Number($(id).value);
+    return editWalk(editing.points, {
+        trimStartM: v('edit-trim-start'),
+        trimEndM: v('edit-trim-end'),
+        cut: $('edit-cut-on').checked ? { fromM: v('edit-cut-from'), toM: v('edit-cut-to') } : null,
+        simplifyM: v('edit-simplify'),
+    });
+}
+
+function updateWalkEdit(fit = false) {
+    if (!editing) return;
+    for (const id of EDIT_RANGES) setText($(`${id}-out`), formatDistance(Number($(id).value)));
+    $('edit-cut').hidden = !$('edit-cut-on').checked;
+    for (const id of ['edit-cut-from', 'edit-cut-to']) $(id).disabled = !$('edit-cut-on').checked;
+    const r = currentEdit();
+    // Zoomed to the walk above the box (and the Start bar under it).
+    const mapBottom = $('map').getBoundingClientRect().bottom;
+    view.setEditPreview(r.points, r.removed, { fit, bottom: Math.max(60, mapBottom - $('finish-box').getBoundingClientRect().top + 20) });
+    const ok = r.points.length >= 2 && r.length > 0;
+    const snap = ok ? snapPlan(r.points) : null;
+    setText($('edit-result'), ok ? `Kept ${formatDistance(r.length)} of ${formatDistance(r.original)} · ${r.points.length} points` : 'Nothing left: trim less.');
+    $('edit-save').disabled = !ok;
+    $('edit-snap').disabled = !ok;
+    setText($('edit-snap'), snap ? `Snap to trails (${snap.requests} request${snap.requests === 1 ? '' : 's'})` : 'Snap to trails');
+}
+
+for (const id of [...EDIT_RANGES, 'edit-simplify']) $(id).addEventListener('input', () => updateWalkEdit());
+// The box grows or shrinks: zoom again so the walk stays above it.
+$('edit-cut-on').addEventListener('change', () => updateWalkEdit(true));
+$('edit-back').addEventListener('click', () => closeWalkEdit());
+
+// The edited walk replaces the walk; the earlier version is kept (Track Library › Restore).
+$('edit-save').addEventListener('click', async () => {
+    const r = currentEdit();
+    const own = r.points.filter((p) => Number.isFinite(p.ele)).length;
+    const updated = withNewVersion(editing, {
+        points: r.points,
+        eleInfo: { own, dem: 0, missing: r.points.length - own, status: 'ok' },
+        edited: true,
+        stats: { ...editing.stats, walked: r.length },
+    }, Date.now(), 'edited (trimmed, cut or simplified)');
+    await saveLibraryEntry(updated);
+    renderLibrary();
+    closeWalkEdit();
+    toast(`Saved the edited walk (${formatDistance(r.length)}). Track Library › Restore brings the recorded one back.`, 6000);
+});
+
+// Opens Plan with the edited walk as points on trail segments, each routed (one
+// request per segment); Save there makes a new track linked to the walk.
+$('edit-snap').addEventListener('click', () => {
+    const r = currentEdit();
+    const plan = snapPlan(r.points);
+    if (!routingAvailable()) return toast('Trail routing isn\'t set up: the segments would stay straight.');
+    const name = `${editing.name} · on trails`;
+    const fromWalk = editing.id;
+    hideFinish();
+    openPlanner({ name, plan: { vertices: plan.vertices, segments: plan.segments, routes: plan.routes }, fromWalk });
+    toast(`Finding trails: ${plan.requests} routing request${plan.requests === 1 ? '' : 's'}. Check the line, then Save.`, 6000);
+});
 
 // Keeps the loaded track (e.g. the sample, or one restored from before v0.10)
 // in the library too.
@@ -2245,48 +2469,99 @@ function renderLibraryStatus() {
 }
 
 async function renderLibrary() {
-    const list = $('library');
     let entries = [];
     try {
         entries = await loadLibrary();
     } catch (err) {
         console.error('Loading saved walks failed:', err);
     }
-    list.replaceChildren(...entries.slice().reverse().map((entry) => {
-        const row = document.createElement('div');
-        row.className = 'library-row';
-        const label = document.createElement('span');
-        const { total } = buildTrack(entry.points);
-        const entryKey = trackKeyOf({ name: entry.name, points: entry.points, total });
-        const isLoaded = () => entryKey === trackKey();
-        const stops = entry.waypoints?.length ? ` · ${entry.waypoints.length} waypoints` : '';
-        label.textContent = `${entry.name} · ${formatDistance(total)}${stops}${isLoaded() ? ' · loaded' : ''}`;
-        const load = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Load' });
-        load.addEventListener('click', async () => {
-            if (!await keepRecording(`Loading “${entry.name}”`)) return;
-            await setTrack(entry.name, entry.points, { eleInfo: entry.eleInfo, waypoints: entry.waypoints });
-            resetTrip();
-            showTab('go');
-            toast(`Loaded ${formatDistance(track.total)} track: Start to follow it.`);
-        });
-        const edit = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit' });
-        edit.addEventListener('click', () => openPlanner(entry));
-        const del = Object.assign(document.createElement('button'), { type: 'button', className: 'danger', textContent: 'Delete' });
-        del.addEventListener('click', async () => {
-            const loaded = isLoaded();
-            if (!confirm(`Delete “${entry.name}” from this device?` +
-                (loaded && !hike.running ? ' It is loaded now, so it is unloaded too.' : ''))) return;
-            await kvSet('library', (await loadLibrary()).filter((e) => e.id !== entry.id));
-            renderLibrary();
-            // Otherwise it would stay on the map and look as if Delete had failed.
-            if (loaded && hike.running) toast('Deleted from the library. Still loaded for your hike: Stop, then Unload track.', 5000);
-            else if (loaded) await removeLoadedTrack({ confirmed: true });
-        });
-        row.append(label, load, edit, del);
-        return row;
-    }));
-    $('library-empty').hidden = entries.length > 0;
+    const links = libraryLinks(entries);
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const newestFirst = entries.slice().reverse();
+    const tracks = newestFirst.filter((e) => entryKind(e) === 'track');
+    const walks = newestFirst.filter((e) => entryKind(e) === 'walk');
+    $('library').replaceChildren(...tracks.map((e) => libraryRow(e, links, byId)));
+    $('library-walks').replaceChildren(...walks.map((e) => libraryRow(e, links, byId)));
+    $('library-empty').hidden = tracks.length > 0;
+    $('library-walks-empty').hidden = walks.length > 0;
     renderLibraryStatus();
+}
+
+// One Track Library entry: name, distance, Load / Edit / Delete, and a line with
+// its links (a walk's track, a track's walks) and Restore when an earlier version is kept.
+function libraryRow(entry, links, byId) {
+    const row = document.createElement('div');
+    row.className = 'library-row';
+    const label = document.createElement('span');
+    const { total } = buildTrack(entry.points);
+    const entryKey = trackKeyOf({ name: entry.name, points: entry.points, total });
+    const isLoaded = () => entryKey === trackKey();
+    const stops = entry.waypoints?.length ? ` · ${entry.waypoints.length} waypoints` : '';
+    label.textContent = `${entry.name} · ${formatDistance(total)}${stops}${isLoaded() ? ' · loaded' : ''}`;
+    const load = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Load' });
+    load.addEventListener('click', async () => {
+        if (!await keepRecording(`Loading “${entry.name}”`)) return;
+        hideFinish();
+        await setTrack(entry.name, entry.points, { eleInfo: entry.eleInfo, waypoints: entry.waypoints });
+        resetTrip();
+        showTab('go');
+        toast(`Loaded ${formatDistance(track.total)} ${entryKind(entry) === 'walk' ? 'walk' : 'track'}: Start to follow it.`);
+    });
+    const edit = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit' });
+    edit.addEventListener('click', () => openPlanner(entry));
+    const del = Object.assign(document.createElement('button'), { type: 'button', className: 'danger', textContent: 'Delete' });
+    del.addEventListener('click', async () => {
+        const loaded = isLoaded();
+        if (!confirm(`Delete “${entry.name}” from this device?` +
+            (loaded && !hike.running ? ' It is loaded now, so it is unloaded too.' : ''))) return;
+        await kvSet('library', (await loadLibrary()).filter((e) => e.id !== entry.id));
+        if (entry.id === hike.walkId) hike.walkId = null; // Save walk makes a new one
+        renderLibrary();
+        // Otherwise it would stay on the map and look as if Delete had failed.
+        if (loaded && hike.running) toast('Deleted from the library. Still loaded for your hike: Stop, then Unload track.', 5000);
+        else if (loaded) await removeLoadedTrack({ confirmed: true });
+    });
+    row.append(label, load, edit, del);
+
+    // The links and history line.
+    const sub = document.createElement('div');
+    sub.className = 'lib-sub';
+    const parts = [];
+    if (entryKind(entry) === 'walk') {
+        const s = entry.stats;
+        if (entry.recordedAt) parts.push(formatDateTime(entry.recordedAt));
+        if (s) parts.push(`moving ${formatDuration(s.movingMs)} · ↑ ${formatMetres(s.ascent)}`);
+        const t = links.trackOf(entry);
+        if (t) parts.push(`along “${t.name}”`);
+        else if (entry.trackName) parts.push(`along “${entry.trackName}” (not in the library)`);
+        else parts.push('free walk');
+    } else {
+        const walks = links.walksOf(entry);
+        if (walks.length) parts.push(`${walks.length} walk${walks.length > 1 ? 's' : ''}: ${walks.map((w) => w.recordedAt ? formatDateTime(w.recordedAt) : w.name).join(', ')}`);
+        const from = entry.fromWalk ? byId.get(entry.fromWalk) : null;
+        if (entry.fromWalk) parts.push(from ? `made from “${from.name}”` : 'made from a walk (deleted)');
+    }
+    if (entry.versionReason && entry.versions?.length) parts.push(entry.versionReason);
+    sub.append(parts.join(' · '));
+    if (entry.versions?.length) {
+        const restore = Object.assign(document.createElement('button'), { type: 'button', className: 'link-btn', textContent: 'Restore previous version' });
+        restore.addEventListener('click', () => restoreEntry(entry));
+        sub.append(' ', restore);
+    }
+    if (parts.length || entry.versions?.length) row.append(sub);
+    return row;
+}
+
+async function restoreEntry(entry) {
+    const prev = entry.versions[0];
+    if (!confirm(`Restore the previous version of “${entry.name}” (${formatDistance(buildTrack(prev.points).total)}, saved ${formatDateTime(prev.savedAt)})? ` +
+        `The current one (${formatDistance(buildTrack(entry.points).total)}) is dropped.`)) return;
+    const wasLoaded = trackKeyOf({ name: entry.name, points: entry.points, total: buildTrack(entry.points).total }) === trackKey();
+    const restored = restoreVersion(entry, Date.now());
+    await saveLibraryEntry(restored);
+    if (wasLoaded && !hike.running) await setTrack(restored.name, restored.points, { eleInfo: restored.eleInfo, waypoints: restored.waypoints });
+    renderLibrary();
+    toast(`Restored “${entry.name}” (${formatDistance(buildTrack(restored.points).total)}).`);
 }
 
 $('fill-ele-btn').addEventListener('click', () => {
